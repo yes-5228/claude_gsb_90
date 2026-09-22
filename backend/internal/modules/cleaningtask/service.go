@@ -24,18 +24,38 @@ type SegmentGateway interface {
 	BriefsByIDs(ctx context.Context, ids []uint) (map[uint]pipesegment.Brief, error)
 }
 
+// SnapshotGateway 层级快照能力（由 hierarchy.Service 实现）。
+//
+// 在同一个事务内锁定管段当前层级并回调写入，保证任务登记时固化的片区 / 道路名称
+// 与层级调整事务严格互斥：调整期间录入的任务只会取调整前或调整后其中一个口径。
+type SnapshotGateway interface {
+	SnapshotTx(ctx context.Context, segmentID uint, fn func(tx *gorm.DB, snap Snapshot) error) error
+}
+
+// Snapshot 登记当时的层级名称（字段与 hierarchy.Snapshot 对应，这里以接口解耦）。
+type Snapshot struct {
+	DistrictID   uint
+	DistrictName string
+	RoadID       *uint
+	RoadName     string
+}
+
 // Service 清淤任务业务逻辑。
 type Service struct {
-	repo     *Repository
-	segments SegmentGateway
+	repo      *Repository
+	segments  SegmentGateway
+	snapshots SnapshotGateway
 }
 
 // NewService 构造服务。
-func NewService(repo *Repository, segments SegmentGateway) *Service {
-	return &Service{repo: repo, segments: segments}
+func NewService(repo *Repository, segments SegmentGateway, snapshots SnapshotGateway) *Service {
+	return &Service{repo: repo, segments: segments, snapshots: snapshots}
 }
 
 // Create 登记清淤任务，任务编号按 日期 + 流水号 自动生成。
+//
+// 层级名称快照在与层级调整互斥的事务内读取并写入：调整期间登记的任务只会按
+// 调整前或调整后其中一个确定口径归属，不会出现新旧名称混用。
 func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningTask, error) {
 	task := &CleaningTask{}
 	if err := s.build(ctx, req, task); err != nil {
@@ -44,15 +64,37 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningTask, e
 
 	for attempt := 0; attempt < 5; attempt++ {
 		task.Code = s.nextCode(ctx, task.PlanStartDate)
-		err := s.repo.Create(ctx, task)
+		var err error
+		if s.snapshots != nil {
+			err = s.snapshots.SnapshotTx(ctx, task.PipeSegmentID, func(tx *gorm.DB, snap Snapshot) error {
+				applySnapshot(task, snap)
+				return s.repo.CreateTx(ctx, tx, task)
+			})
+		} else {
+			err = s.repo.Create(ctx, task)
+		}
 		if err == nil {
 			return task, nil
 		}
-		if !errors.Is(err, gorm.ErrDuplicatedKey) {
-			return nil, httpx.WrapInternal("新增清淤任务失败", err)
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			continue
 		}
+		// 层级冲突 / 不存在等业务错误直接返回，其余包装为内部错误。
+		var appErr *httpx.AppError
+		if errors.As(err, &appErr) {
+			return nil, err
+		}
+		return nil, httpx.WrapInternal("新增清淤任务失败", err)
 	}
 	return nil, httpx.Conflict("任务编号生成冲突，请稍后重试")
+}
+
+// applySnapshot 把登记当时的层级名称固化到任务上。
+func applySnapshot(task *CleaningTask, snap Snapshot) {
+	task.DistrictSnapshotID = snap.DistrictID
+	task.DistrictSnapshot = snap.DistrictName
+	task.RoadSnapshotID = snap.RoadID
+	task.RoadSnapshot = snap.RoadName
 }
 
 // Update 修改任务。已完工进入验收流程后不再允许改动计划信息。
@@ -71,12 +113,29 @@ func (s *Service) Update(ctx context.Context, id uint, req SaveRequest) (*Cleani
 	if err != nil {
 		return nil, httpx.WrapInternal("检查清淤记录失败", err)
 	}
-	if hasRecords && req.PipeSegmentID != task.PipeSegmentID {
+	segmentChanged := req.PipeSegmentID != task.PipeSegmentID
+	if hasRecords && segmentChanged {
 		return nil, httpx.InvalidState("任务已录入清淤记录，不能再更换关联管段")
 	}
 
 	if err := s.build(ctx, req, task); err != nil {
 		return nil, err
+	}
+	// 更换关联管段时，任务的层级名称快照按新管段当前层级重新固化；
+	// 未更换管段时保留原快照，不受片区改名影响（历史口径）。
+	if segmentChanged && s.snapshots != nil {
+		err = s.snapshots.SnapshotTx(ctx, task.PipeSegmentID, func(tx *gorm.DB, snap Snapshot) error {
+			applySnapshot(task, snap)
+			return s.repo.SaveTx(ctx, tx, task)
+		})
+		if err != nil {
+			var appErr *httpx.AppError
+			if errors.As(err, &appErr) {
+				return nil, err
+			}
+			return nil, httpx.WrapInternal("修改清淤任务失败", err)
+		}
+		return task, nil
 	}
 	if err := s.repo.Save(ctx, task); err != nil {
 		return nil, httpx.WrapInternal("修改清淤任务失败", err)

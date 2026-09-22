@@ -5,16 +5,17 @@ import (
 	"testing"
 
 	"github.com/drainage/desilting/internal/httpx"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 	"github.com/drainage/desilting/internal/testsupport"
 )
 
-func segmentRequest(code, district string) pipesegment.SaveRequest {
+func segmentRequest(code string, districtID uint, roadID *uint) pipesegment.SaveRequest {
 	return pipesegment.SaveRequest{
 		Code:         code,
 		Name:         "管段 " + code,
-		District:     district,
-		RoadName:     "中山北路",
+		DistrictID:   districtID,
+		RoadID:       deref(roadID),
 		PipeType:     pipesegment.TypeRainwater,
 		Material:     "concrete",
 		DiameterMm:   800,
@@ -27,28 +28,52 @@ func segmentRequest(code, district string) pipesegment.SaveRequest {
 	}
 }
 
+func deref(p *uint) uint {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
 func TestCreateSegmentRejectsDuplicatedCode(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
 
-	_, err := fixture.Segments.Create(context.Background(), segmentRequest("PS-TEST-001", "城西片区"))
-	appErr := testsupport.RequireAppError(t, err, httpx.CodeConflict)
-	if appErr.Status != 409 {
-		t.Fatalf("期望 HTTP 状态码 409，实际 %d", appErr.Status)
-	}
+	_, err := fixture.Segments.Create(context.Background(), segmentRequest("PS-TEST-001", fixture.District.ID, &fixture.Road.ID))
+	testsupport.RequireAppError(t, err, httpx.CodeConflict)
 }
 
 func TestCreateSegmentRejectsUnknownPipeType(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
-	request := segmentRequest("PS-TEST-002", "城东片区")
+	request := segmentRequest("PS-TEST-002", fixture.District.ID, &fixture.Road.ID)
 	request.PipeType = "stormwater"
 
 	_, err := fixture.Segments.Create(context.Background(), request)
 	testsupport.RequireAppError(t, err, httpx.CodeValidation)
 }
 
+func TestCreateSegmentRejectsUnknownDistrict(t *testing.T) {
+	fixture := testsupport.NewFixture(t)
+	request := segmentRequest("PS-TEST-009", 99999, nil)
+
+	_, err := fixture.Segments.Create(context.Background(), request)
+	testsupport.RequireAppError(t, err, httpx.CodeNotFound)
+}
+
+func TestCreateSegmentRejectsRoadFromOtherDistrict(t *testing.T) {
+	fixture := testsupport.NewFixture(t)
+	other, err := fixture.Hierarchy.CreateDistrict(context.Background(), hierarchy.SaveDistrictRequest{Name: "城西片区"})
+	if err != nil {
+		t.Fatalf("创建片区失败: %v", err)
+	}
+	request := segmentRequest("PS-TEST-010", other.ID, &fixture.Road.ID)
+
+	_, err = fixture.Segments.Create(context.Background(), request)
+	testsupport.RequireAppError(t, err, httpx.CodeValidation)
+}
+
 func TestCreateSegmentDefaultsStatusToNormal(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
-	segment := fixture.CreateSegment(t, "PS-TEST-003", "城东片区")
+	segment := fixture.CreateSegment(t, "PS-TEST-003", fixture.District.ID, &fixture.Road.ID)
 
 	if segment.Status != pipesegment.StatusNormal {
 		t.Fatalf("期望默认状态为 %s，实际 %s", pipesegment.StatusNormal, segment.Status)
@@ -69,7 +94,7 @@ func TestDeleteSegmentBlockedWhenReferencedByTask(t *testing.T) {
 
 func TestDeleteSegmentSucceedsWhenNotReferenced(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
-	segment := fixture.CreateSegment(t, "PS-TEST-004", "城西片区")
+	segment := fixture.CreateSegment(t, "PS-TEST-004", fixture.District.ID, nil)
 
 	testsupport.RequireNoError(t, fixture.Segments.Delete(context.Background(), segment.ID))
 
@@ -77,18 +102,22 @@ func TestDeleteSegmentSucceedsWhenNotReferenced(t *testing.T) {
 	testsupport.RequireAppError(t, err, httpx.CodeNotFound)
 }
 
-func TestListSegmentsFiltersByDistrictAndKeyword(t *testing.T) {
+func TestListSegmentsFiltersByHierarchyAndKeyword(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
-	fixture.CreateSegment(t, "PS-TEST-005", "城西片区")
-	fixture.CreateSegment(t, "PS-TEST-006", "城南片区")
+	other, err := fixture.Hierarchy.CreateDistrict(context.Background(), hierarchy.SaveDistrictRequest{Name: "城西片区"})
+	if err != nil {
+		t.Fatalf("创建片区失败: %v", err)
+	}
+	fixture.CreateSegment(t, "PS-TEST-005", other.ID, nil)
+	fixture.CreateSegment(t, "PS-TEST-006", fixture.District.ID, &fixture.Road.ID)
 
 	byDistrict, total, err := fixture.Segments.List(context.Background(), pipesegment.ListQuery{
-		District: "城西片区",
-		Page:     httpx.PageQuery{Page: 1, PageSize: 10},
+		DistrictIDs: []uint{other.ID},
+		Page:        httpx.PageQuery{Page: 1, PageSize: 10},
 	})
 	testsupport.RequireNoError(t, err)
-	if total != 1 || len(byDistrict) != 1 {
-		t.Fatalf("期望按片区筛出 1 条管段，实际 total=%d len=%d", total, len(byDistrict))
+	if total != 1 || len(byDistrict) != 1 || byDistrict[0].Code != "PS-TEST-005" {
+		t.Fatalf("期望按片区多选筛出 1 条管段，实际 total=%d len=%d", total, len(byDistrict))
 	}
 
 	byKeyword, _, err := fixture.Segments.List(context.Background(), pipesegment.ListQuery{

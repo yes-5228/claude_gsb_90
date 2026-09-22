@@ -11,8 +11,8 @@ import (
 type SaveRequest struct {
 	Code         string  `json:"code" label:"管段编号" validate:"required,min=2,max=64"`
 	Name         string  `json:"name" label:"管段名称" validate:"required,max=128"`
-	District     string  `json:"district" label:"所属片区" validate:"required,max=64"`
-	RoadName     string  `json:"roadName" label:"所在道路" validate:"max=128"`
+	DistrictID   uint    `json:"districtId" label:"所属片区" validate:"required"`
+	RoadID       uint    `json:"roadId" label:"所在道路"`
 	PipeType     string  `json:"pipeType" label:"管段类型" validate:"required"`
 	Material     string  `json:"material" label:"管材" validate:"max=32"`
 	DiameterMm   int     `json:"diameterMm" label:"管径(mm)" validate:"gt=0,lte=5000"`
@@ -26,23 +26,26 @@ type SaveRequest struct {
 	Remark       string  `json:"remark" label:"备注" validate:"max=1000"`
 }
 
-// ListQuery 管段列表查询条件。
+// ListQuery 管段列表查询条件。片区 / 道路均支持多选（OR 合并），
+// 同时给出片区与道路时取交集（道路必须归属所选片区之一）。
 type ListQuery struct {
-	Keyword  string
-	District string
-	PipeType string
-	Status   string
-	Page     httpx.PageQuery
+	Keyword     string
+	DistrictIDs []uint
+	RoadIDs     []uint
+	PipeType    string
+	Status      string
+	Page        httpx.PageQuery
 }
 
 // ParseListQuery 从请求 query 中解析列表查询条件。
 func ParseListQuery(c *fiber.Ctx) ListQuery {
 	return ListQuery{
-		Keyword:  httpx.TrimmedQuery(c, "keyword"),
-		District: httpx.TrimmedQuery(c, "district"),
-		PipeType: httpx.TrimmedQuery(c, "pipeType"),
-		Status:   httpx.TrimmedQuery(c, "status"),
-		Page:     httpx.ParsePage(c),
+		Keyword:     httpx.TrimmedQuery(c, "keyword"),
+		DistrictIDs: httpx.ParseIDList(c, "districtIds"),
+		RoadIDs:     httpx.ParseIDList(c, "roadIds"),
+		PipeType:    httpx.TrimmedQuery(c, "pipeType"),
+		Status:      httpx.TrimmedQuery(c, "status"),
+		Page:        httpx.ParsePage(c),
 	}
 }
 
@@ -53,8 +56,8 @@ type DetailResponse struct {
 	RecentTasks []refx.TaskRef `json:"recentTasks"`
 }
 
-// OptionsResponse 下拉选项：管段列表 + 已有片区，便于前端筛选与联动。
+// OptionsResponse 下拉选项：管段列表。层级树统一由 /hierarchy/tree 提供，
+// 这里不再重复下发片区列表，保证台账与各业务页面使用同一套层级。
 type OptionsResponse struct {
-	Items     []Brief  `json:"items"`
-	Districts []string `json:"districts"`
+	Items []Brief `json:"items"`
 }

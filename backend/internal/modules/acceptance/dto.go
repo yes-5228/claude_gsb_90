@@ -38,6 +38,8 @@ type ListQuery struct {
 	Keyword        string
 	TaskID         uint
 	SegmentID      uint
+	DistrictIDs    []uint
+	RoadIDs        []uint
 	Result         string
 	InspectorName  string
 	DateFrom       *date.Date
@@ -52,6 +54,8 @@ func ParseListQuery(c *fiber.Ctx) (ListQuery, error) {
 		Keyword:        httpx.TrimmedQuery(c, "keyword"),
 		TaskID:         uint(c.QueryInt("taskId", 0)),
 		SegmentID:      uint(c.QueryInt("segmentId", 0)),
+		DistrictIDs:    httpx.ParseIDList(c, "districtIds"),
+		RoadIDs:        httpx.ParseIDList(c, "roadIds"),
 		Result:         httpx.TrimmedQuery(c, "result"),
 		InspectorName:  httpx.TrimmedQuery(c, "inspectorName"),
 		PendingRectify: c.QueryBool("pendingRectify", false),

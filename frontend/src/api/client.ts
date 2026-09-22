@@ -62,16 +62,25 @@ export const http = {
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
-  del: <T>(path: string) => request<T>(path, { method: 'DELETE' })
+  del: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: 'DELETE', body: body === undefined ? undefined : JSON.stringify(body) })
 };
 
-type QueryValue = string | number | boolean | undefined | null;
+type QueryValue = string | number | boolean | undefined | null | Array<string | number>;
 
-/** 把查询条件拼成查询串，自动跳过空值。 */
+/** 把查询条件拼成查询串，自动跳过空值；数组按同名参数重复展开，供多选 / 全选筛选使用。 */
 export function buildQuery(params: Record<string, QueryValue>): string {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value === undefined || value === null || value === '') {
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== '' && item !== null && item !== undefined) {
+          search.append(key, String(item));
+        }
+      });
       return;
     }
     search.set(key, String(value));

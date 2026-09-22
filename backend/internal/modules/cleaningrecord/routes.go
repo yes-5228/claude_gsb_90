@@ -6,8 +6,8 @@ import (
 )
 
 // Register 注册清淤记录路由，并返回 service 供其他模块装配依赖。
-func Register(router fiber.Router, db *gorm.DB, tasks TaskGateway) *Service {
-	svc := NewService(NewRepository(db), tasks)
+func Register(router fiber.Router, db *gorm.DB, tasks TaskGateway, snapshots SnapshotGateway) *Service {
+	svc := NewService(NewRepository(db), tasks, snapshots)
 	handler := NewHandler(svc)
 
 	group := router.Group("/cleaning-records")

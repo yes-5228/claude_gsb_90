@@ -22,24 +22,42 @@ type TaskGateway interface {
 	EnsureStarted(ctx context.Context, id uint) (*cleaningtask.CleaningTask, error)
 }
 
+// SnapshotGateway 层级快照能力（由 hierarchy.Service 实现）。
+type SnapshotGateway interface {
+	SnapshotTx(ctx context.Context, segmentID uint, fn func(tx *gorm.DB, snap Snapshot) error) error
+}
+
+// Snapshot 登记当时的层级名称。
+type Snapshot struct {
+	DistrictID   uint
+	DistrictName string
+	RoadID       *uint
+	RoadName     string
+}
+
 // Service 清淤记录业务逻辑。
 type Service struct {
-	repo  *Repository
-	tasks TaskGateway
+	repo      *Repository
+	tasks     TaskGateway
+	snapshots SnapshotGateway
 }
 
 // NewService 构造服务。
-func NewService(repo *Repository, tasks TaskGateway) *Service {
-	return &Service{repo: repo, tasks: tasks}
+func NewService(repo *Repository, tasks TaskGateway, snapshots SnapshotGateway) *Service {
+	return &Service{repo: repo, tasks: tasks, snapshots: snapshots}
 }
 
 // Create 录入清淤记录。首次录入时会把任务从"待开工"推进到"清淤中"。
+//
+// 记录按管段当前层级固化名称快照，且快照读取与层级调整事务互斥：调整期间正在
+// 录入的记录只会按调整前或调整后其中一个确定口径归属。
 func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningRecord, error) {
 	if err := validate(req); err != nil {
 		return nil, err
 	}
 	// 先确认任务可录入（同时完成状态推进），避免写入脏数据。
-	if _, err := s.tasks.EnsureStarted(ctx, req.TaskID); err != nil {
+	task, err := s.tasks.EnsureStarted(ctx, req.TaskID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -48,13 +66,29 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningRecord,
 
 	for attempt := 0; attempt < 5; attempt++ {
 		record.Code = s.nextCode(ctx, record.CleanedAt)
-		err := s.repo.Create(ctx, record)
-		if err == nil {
+		var createErr error
+		if s.snapshots != nil {
+			createErr = s.snapshots.SnapshotTx(ctx, task.PipeSegmentID, func(tx *gorm.DB, snap Snapshot) error {
+				record.DistrictSnapshotID = snap.DistrictID
+				record.DistrictSnapshot = snap.DistrictName
+				record.RoadSnapshotID = snap.RoadID
+				record.RoadSnapshot = snap.RoadName
+				return s.repo.CreateTx(ctx, tx, record)
+			})
+		} else {
+			createErr = s.repo.Create(ctx, record)
+		}
+		if createErr == nil {
 			return record, nil
 		}
-		if !errors.Is(err, gorm.ErrDuplicatedKey) {
-			return nil, httpx.WrapInternal("录入清淤记录失败", err)
+		if errors.Is(createErr, gorm.ErrDuplicatedKey) {
+			continue
 		}
+		var appErr *httpx.AppError
+		if errors.As(createErr, &appErr) {
+			return nil, createErr
+		}
+		return nil, httpx.WrapInternal("录入清淤记录失败", createErr)
 	}
 	return nil, httpx.Conflict("记录编号生成冲突，请稍后重试")
 }

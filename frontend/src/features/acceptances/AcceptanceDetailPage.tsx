@@ -140,7 +140,12 @@ export function AcceptanceDetailPage() {
                     { label: '优先级', value: <StatusTag list="taskPriorities" value={task.priority} /> },
                     { label: '实施班组', value: task.teamName || '—' },
                     { label: '关联管段', value: `${task.segmentCode} · ${task.segmentName}` },
-                    { label: '所属片区', value: task.segmentDistrict || '—' }
+                    {
+                      label: '层级（验收当时）',
+                      value: acceptance?.districtSnapshot
+                        ? `${acceptance.districtSnapshot}${acceptance.roadSnapshot ? ` · ${acceptance.roadSnapshot}` : ''}`
+                        : task.segmentDistrict || '—'
+                    }
                   ]}
                 />
               ) : (

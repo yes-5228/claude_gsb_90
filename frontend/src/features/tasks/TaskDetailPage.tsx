@@ -174,7 +174,12 @@ export function TaskDetailPage() {
                   { label: '任务编号', value: task.code },
                   { label: '任务标题', value: task.title },
                   { label: '关联管段', value: detail.data?.segment ? `${detail.data.segment.code} · ${detail.data.segment.name}` : '—' },
-                  { label: '所属片区', value: detail.data?.segment?.district ?? '—' },
+                  {
+                    label: '层级（登记当时）',
+                    value: task.districtSnapshot
+                      ? `${task.districtSnapshot}${task.roadSnapshot ? ` · ${task.roadSnapshot}` : ''}`
+                      : '—'
+                  },
                   { label: '优先级', value: <StatusTag list="taskPriorities" value={task.priority} /> },
                   { label: '任务来源', value: <StatusTag list="taskSources" value={task.source} /> },
                   { label: '计划清淤方式', value: <StatusTag list="cleaningMethods" value={task.method} /> },

@@ -24,14 +24,88 @@ export interface PageResult<T> {
   pageSize: number;
 }
 
+// ---------- 片区 / 道路层级 ----------
+
+export type HierarchyNodeType = 'district' | 'road';
+export type HierarchyAction =
+  | 'create_district'
+  | 'create_road'
+  | 'rename_district'
+  | 'rename_road'
+  | 'move_road'
+  | 'delete_district'
+  | 'delete_road';
+
+export interface District {
+  id: number;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Road {
+  id: number;
+  districtId: number;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DistrictNode extends District {
+  roads: Road[];
+}
+
+export interface HierarchyTree {
+  districts: DistrictNode[];
+}
+
+export interface HierarchyRefCounts {
+  segmentCount: number;
+  taskCount: number;
+  recordCount: number;
+  acceptanceCount: number;
+}
+
+export interface HierarchyChangeLog {
+  id: number;
+  batchId: string;
+  nodeType: HierarchyNodeType;
+  nodeId: number;
+  action: HierarchyAction;
+  name: string;
+  before: string;
+  after: string;
+  reason: string;
+  operator: string;
+  createdAt: string;
+}
+
+export interface BatchAdjustPayload {
+  reason?: string;
+  operator?: string;
+  districts: { id: number; name?: string }[];
+  roads: { id: number; name?: string; districtId?: number }[];
+}
+
+export interface BatchAdjustResult {
+  batchId: string;
+  districtChanges: number;
+  roadChanges: number;
+}
+
 // ---------- 管段台账 ----------
 
 export interface PipeSegment {
   id: number;
   code: string;
   name: string;
-  district: string;
-  roadName: string;
+  districtId: number;
+  roadId: number | null;
+  /** 层级当前名称，由后端联表补齐，列表 / 详情展示用。 */
+  districtName?: string;
+  roadName?: string;
   pipeType: PipeType;
   material: string;
   diameterMm: number;
@@ -53,7 +127,9 @@ export interface SegmentBrief {
   id: number;
   code: string;
   name: string;
-  district: string;
+  districtId: number;
+  districtName: string;
+  roadId: number | null;
   roadName: string;
 }
 
@@ -103,14 +179,13 @@ export interface SegmentHistoryItem {
 
 export interface SegmentOptions {
   items: SegmentBrief[];
-  districts: string[];
 }
 
 export interface SegmentPayload {
   code: string;
   name: string;
-  district: string;
-  roadName: string;
+  districtId: number;
+  roadId: number | null;
   pipeType: PipeType;
   material: string;
   diameterMm: number;
@@ -131,6 +206,9 @@ export interface CleaningTask {
   code: string;
   title: string;
   pipeSegmentId: number;
+  /** 任务登记当时固化的层级名称（历史口径）。 */
+  districtSnapshot: string;
+  roadSnapshot: string;
   priority: TaskPriority;
   source: TaskSource;
   method: CleaningMethod | '';
@@ -208,13 +286,20 @@ export interface TaskBrief {
   teamName: string;
   segmentCode: string;
   segmentName: string;
+  /** 优先展示任务登记当时的层级快照，历史数据迁移时回退为管段当前层级。 */
   segmentDistrict: string;
+  segmentRoad: string;
+  districtId: number;
+  roadId: number | null;
 }
 
 export interface CleaningRecord {
   id: number;
   code: string;
   taskId: number;
+  /** 记录登记当时固化的层级名称（历史口径）。 */
+  districtSnapshot: string;
+  roadSnapshot: string;
   cleanedAt: string | null;
   lengthM: number;
   sludgeVolumeM3: number;
@@ -265,6 +350,9 @@ export interface AcceptanceRecord {
   code: string;
   taskId: number;
   cleaningRecordId: number | null;
+  /** 验收登记当时固化的层级名称（历史口径）。 */
+  districtSnapshot: string;
+  roadSnapshot: string;
   acceptedAt: string | null;
   inspectorName: string;
   inspectorOrg: string;
@@ -334,6 +422,7 @@ export interface Overview {
 }
 
 export interface DistrictStat {
+  districtId: number;
   district: string;
   segmentCount: number;
   segmentLengthM: number;
@@ -351,6 +440,8 @@ export interface PendingAcceptanceItem {
   segmentCode: string;
   segmentName: string;
   segmentDistrict: string;
+  segmentRoad: string;
+  districtId: number;
   teamName: string;
   planEndDate: string | null;
   finishedAt: string | null;
@@ -368,6 +459,8 @@ export interface RecentRecordItem {
   taskTitle: string;
   segmentCode: string;
   segmentName: string;
+  segmentDistrict: string;
+  segmentRoad: string;
   teamName: string;
   recorderName: string;
   lengthM: number;

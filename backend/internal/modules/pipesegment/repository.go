@@ -87,8 +87,16 @@ func (r *Repository) List(ctx context.Context, query ListQuery) ([]PipeSegment, 
 	}
 
 	segments := make([]PipeSegment, 0)
-	err := r.filtered(ctx, query).
-		Order("district ASC, code ASC").
+	tx := r.filtered(ctx, query)
+	// 若关键字筛选已联过层级表，这里只补片区；否则两表都联。
+	if strings.TrimSpace(query.Keyword) != "" {
+		tx = tx.Joins("LEFT JOIN " + refx.TableDistricts + " AS d ON d.id = pipe_segments.district_id")
+	} else {
+		tx = tx.Joins("LEFT JOIN " + refx.TableDistricts + " AS d ON d.id = pipe_segments.district_id").
+			Joins("LEFT JOIN " + refx.TableRoads + " AS rd ON rd.id = pipe_segments.road_id")
+	}
+	err := tx.Select("pipe_segments.*, d.name AS district_name, COALESCE(rd.name, '') AS road_name").
+		Order("pipe_segments.district_id ASC, pipe_segments.road_id ASC, pipe_segments.code ASC").
 		Offset(query.Page.Offset()).
 		Limit(query.Page.PageSize).
 		Find(&segments).Error
@@ -98,25 +106,67 @@ func (r *Repository) List(ctx context.Context, query ListQuery) ([]PipeSegment, 
 	return segments, total, nil
 }
 
+// AttachHierarchyNames 为单个管段补齐当前层级名称（只读字段），供详情页展示。
+func (r *Repository) AttachHierarchyNames(ctx context.Context, segment *PipeSegment) error {
+	if segment == nil {
+		return nil
+	}
+	var names struct {
+		DistrictName string
+		RoadName     string
+	}
+	query := r.db.WithContext(ctx).Table(refx.TableDistricts+" AS d").
+		Select("d.name AS district_name, rd.name AS road_name").
+		Where("d.id = ?", segment.DistrictID)
+	if segment.RoadID != nil && *segment.RoadID > 0 {
+		query = query.Joins("LEFT JOIN "+refx.TableRoads+" AS rd ON rd.id = ? AND rd.district_id = d.id", *segment.RoadID)
+	} else {
+		query = query.Joins("LEFT JOIN " + refx.TableRoads + " AS rd ON rd.id = 0")
+	}
+	if err := query.Scan(&names).Error; err != nil {
+		return err
+	}
+	segment.DistrictName = names.DistrictName
+	segment.RoadName = names.RoadName
+	return nil
+}
+
 func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 	tx := r.db.WithContext(ctx).Model(&PipeSegment{})
 	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
 		like := "%" + keyword + "%"
-		tx = tx.Where(
-			"LOWER(code) LIKE ? OR LOWER(name) LIKE ? OR LOWER(road_name) LIKE ? OR LOWER(start_manhole) LIKE ? OR LOWER(end_manhole) LIKE ?",
-			like, like, like, like, like,
-		)
+		// 道路名称来自层级表，关键字筛选联表一次。
+		tx = tx.Joins("LEFT JOIN "+refx.TableRoads+" AS rd ON rd.id = pipe_segments.road_id").
+			Where(
+				"LOWER(pipe_segments.code) LIKE ? OR LOWER(pipe_segments.name) LIKE ? OR LOWER(rd.name) LIKE ? OR LOWER(pipe_segments.start_manhole) LIKE ? OR LOWER(pipe_segments.end_manhole) LIKE ?",
+				like, like, like, like, like,
+			)
 	}
-	if query.District != "" {
-		tx = tx.Where("district = ?", query.District)
+	if len(query.DistrictIDs) > 0 {
+		tx = tx.Where("pipe_segments.district_id IN ?", query.DistrictIDs)
+	}
+	if len(query.RoadIDs) > 0 {
+		tx = tx.Where("pipe_segments.road_id IN ?", query.RoadIDs)
 	}
 	if query.PipeType != "" {
-		tx = tx.Where("pipe_type = ?", query.PipeType)
+		tx = tx.Where("pipe_segments.pipe_type = ?", query.PipeType)
 	}
 	if query.Status != "" {
-		tx = tx.Where("status = ?", query.Status)
+		tx = tx.Where("pipe_segments.status = ?", query.Status)
 	}
 	return tx
+}
+
+// briefSelect 管段精简信息的统一联表选择列：名称取自当前层级。
+const briefSelect = `pipe_segments.id AS id, pipe_segments.code AS code, pipe_segments.name AS name,
+	pipe_segments.district_id AS district_id,
+	COALESCE(d.name, '') AS district_name,
+	pipe_segments.road_id AS road_id,
+	COALESCE(rd.name, '') AS road_name`
+
+func briefScope(tx *gorm.DB) *gorm.DB {
+	return tx.Joins("LEFT JOIN " + refx.TableDistricts + " AS d ON d.id = pipe_segments.district_id").
+		Joins("LEFT JOIN " + refx.TableRoads + " AS rd ON rd.id = pipe_segments.road_id")
 }
 
 // Search 按关键字搜索管段，用于下拉选择。
@@ -124,14 +174,13 @@ func (r *Repository) Search(ctx context.Context, keyword string, limit int) ([]B
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	tx := r.db.WithContext(ctx).Model(&PipeSegment{}).
-		Select("id, code, name, district, road_name")
+	tx := briefScope(r.db.WithContext(ctx).Table(refx.TablePipeSegments)).Select(briefSelect)
 	if trimmed := strings.ToLower(strings.TrimSpace(keyword)); trimmed != "" {
 		like := "%" + trimmed + "%"
-		tx = tx.Where("LOWER(code) LIKE ? OR LOWER(name) LIKE ?", like, like)
+		tx = tx.Where("LOWER(pipe_segments.code) LIKE ? OR LOWER(pipe_segments.name) LIKE ?", like, like)
 	}
 	items := make([]Brief, 0, limit)
-	err := tx.Order("code ASC").Limit(limit).Scan(&items).Error
+	err := tx.Order("pipe_segments.code ASC").Limit(limit).Scan(&items).Error
 	return items, err
 }
 
@@ -142,9 +191,9 @@ func (r *Repository) BriefsByIDs(ctx context.Context, ids []uint) (map[uint]Brie
 		return result, nil
 	}
 	items := make([]Brief, 0, len(ids))
-	err := r.db.WithContext(ctx).Model(&PipeSegment{}).
-		Select("id, code, name, district, road_name").
-		Where("id IN ?", ids).
+	err := briefScope(r.db.WithContext(ctx).Table(refx.TablePipeSegments)).
+		Select(briefSelect).
+		Where("pipe_segments.id IN ?", ids).
 		Scan(&items).Error
 	if err != nil {
 		return nil, err
@@ -153,16 +202,6 @@ func (r *Repository) BriefsByIDs(ctx context.Context, ids []uint) (map[uint]Brie
 		result[item.ID] = item
 	}
 	return result, nil
-}
-
-// Districts 返回全部已使用的片区名称。
-func (r *Repository) Districts(ctx context.Context) ([]string, error) {
-	districts := make([]string, 0)
-	err := r.db.WithContext(ctx).Model(&PipeSegment{}).
-		Distinct().
-		Order("district ASC").
-		Pluck("district", &districts).Error
-	return districts, err
 }
 
 // MarkCleaned 更新管段的清淤统计：次数 +1，最近清淤日期取更晚的一次。

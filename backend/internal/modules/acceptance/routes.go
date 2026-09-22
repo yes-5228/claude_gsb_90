@@ -6,8 +6,8 @@ import (
 )
 
 // Register 注册验收记录路由，并返回 service 供看板模块读取。
-func Register(router fiber.Router, db *gorm.DB, tasks TaskGateway, segments SegmentGateway, records RecordGateway) *Service {
-	svc := NewService(NewRepository(db), tasks, segments, records)
+func Register(router fiber.Router, db *gorm.DB, tasks TaskGateway, segments SegmentGateway, records RecordGateway, snapshots SnapshotGateway) *Service {
+	svc := NewService(NewRepository(db), tasks, segments, records, snapshots)
 	handler := NewHandler(svc)
 
 	group := router.Group("/acceptances")

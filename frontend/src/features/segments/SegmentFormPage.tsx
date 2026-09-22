@@ -1,5 +1,5 @@
-// 管段新增 / 编辑表单。
-import { useEffect, useState } from 'react';
+// 管段新增 / 编辑表单。片区 / 道路从统一层级树选择：先选片区，道路下拉只列该片区下的道路。
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { segmentApi } from '../../api/pipesegments';
 import { FormField } from '../../components/FormField';
@@ -10,13 +10,14 @@ import { useToast } from '../../components/Toast';
 import { useAsync } from '../../hooks/useAsync';
 import { useForm, type FormErrors } from '../../hooks/useForm';
 import { useMeta } from '../../providers/MetaProvider';
+import { useHierarchy } from '../../providers/HierarchyProvider';
 import type { PipeSegment, SegmentPayload } from '../../types/domain';
 
 interface SegmentFormValues {
   code: string;
   name: string;
-  district: string;
-  roadName: string;
+  districtId: string;
+  roadId: string;
   pipeType: string;
   material: string;
   diameterMm: string;
@@ -33,8 +34,8 @@ interface SegmentFormValues {
 const EMPTY_FORM: SegmentFormValues = {
   code: '',
   name: '',
-  district: '',
-  roadName: '',
+  districtId: '',
+  roadId: '',
   pipeType: 'rainwater',
   material: '',
   diameterMm: '',
@@ -52,8 +53,8 @@ function toFormValues(segment: PipeSegment): SegmentFormValues {
   return {
     code: segment.code,
     name: segment.name,
-    district: segment.district,
-    roadName: segment.roadName,
+    districtId: String(segment.districtId ?? ''),
+    roadId: segment.roadId ? String(segment.roadId) : '',
     pipeType: segment.pipeType,
     material: segment.material,
     diameterMm: String(segment.diameterMm),
@@ -69,11 +70,12 @@ function toFormValues(segment: PipeSegment): SegmentFormValues {
 }
 
 function toPayload(values: SegmentFormValues): SegmentPayload {
+  const roadId = Number(values.roadId);
   return {
     code: values.code.trim(),
     name: values.name.trim(),
-    district: values.district.trim(),
-    roadName: values.roadName.trim(),
+    districtId: Number(values.districtId),
+    roadId: roadId > 0 ? roadId : null,
     pipeType: values.pipeType as SegmentPayload['pipeType'],
     material: values.material.trim(),
     diameterMm: Number(values.diameterMm),
@@ -98,8 +100,8 @@ function validate(values: SegmentFormValues): FormErrors<SegmentFormValues> {
   if (!values.name.trim()) {
     errors.name = '管段名称不能为空';
   }
-  if (!values.district.trim()) {
-    errors.district = '所属片区不能为空';
+  if (!values.districtId) {
+    errors.districtId = '请选择所属片区';
   }
   if (!values.pipeType) {
     errors.pipeType = '请选择管段类型';
@@ -131,6 +133,7 @@ export function SegmentFormPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const { enums } = useMeta();
+  const { tree } = useHierarchy();
   const id = Number(params.id ?? '0');
   const isEdit = id > 0;
 
@@ -141,6 +144,12 @@ export function SegmentFormPage() {
     () => (isEdit ? segmentApi.detail(id) : Promise.resolve(null)),
     [id, isEdit]
   );
+
+  const districts = tree?.districts ?? [];
+  const roadsOfSelectedDistrict = useMemo(() => {
+    const districtId = Number(form.values.districtId);
+    return districts.find((district) => district.id === districtId)?.roads ?? [];
+  }, [districts, form.values.districtId]);
 
   useEffect(() => {
     const segment = detail.data?.segment;
@@ -175,7 +184,7 @@ export function SegmentFormPage() {
     >
       <PageHeader
         title={isEdit ? '编辑管段' : '新增管段'}
-        description="管段编号在系统内唯一；管段是清淤任务、清淤记录与验收记录的业务主体。"
+        description="管段编号在系统内唯一；管段是清淤任务、清淤记录与验收记录的业务主体，片区 / 道路从统一层级中选择。"
         actions={
           <button type="button" className="btn btn-ghost" onClick={() => navigate(-1)}>
             返回
@@ -208,20 +217,42 @@ export function SegmentFormPage() {
                 onChange={(event) => form.setValue('name', event.target.value)}
               />
             </FormField>
-            <FormField label="所属片区" required error={form.errors.district}>
-              <input
-                className="input"
-                value={form.values.district}
-                placeholder="例如 城东片区"
-                onChange={(event) => form.setValue('district', event.target.value)}
-              />
+            <FormField label="所属片区" required error={form.errors.districtId}>
+              <select
+                className="select"
+                value={form.values.districtId}
+                onChange={(event) => {
+                  form.setValue('districtId', event.target.value);
+                  // 切换片区后清空道路，避免选中不属于该片区的道路。
+                  form.setValue('roadId', '');
+                }}
+              >
+                <option value="">请选择片区</option>
+                {districts.map((district) => (
+                  <option key={district.id} value={district.id}>
+                    {district.name}
+                  </option>
+                ))}
+              </select>
             </FormField>
-            <FormField label="所在道路" error={form.errors.roadName}>
-              <input
-                className="input"
-                value={form.values.roadName}
-                onChange={(event) => form.setValue('roadName', event.target.value)}
-              />
+            <FormField
+              label="所在道路"
+              hint={form.values.districtId ? '不选表示仅归属片区' : '请先选择片区'}
+              error={form.errors.roadId}
+            >
+              <select
+                className="select"
+                value={form.values.roadId}
+                disabled={!form.values.districtId}
+                onChange={(event) => form.setValue('roadId', event.target.value)}
+              >
+                <option value="">未指定道路</option>
+                {roadsOfSelectedDistrict.map((road) => (
+                  <option key={road.id} value={road.id}>
+                    {road.name}
+                  </option>
+                ))}
+              </select>
             </FormField>
             <FormField label="管段类型" required error={form.errors.pipeType}>
               <select

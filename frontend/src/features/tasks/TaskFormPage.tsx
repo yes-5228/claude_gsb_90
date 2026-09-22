@@ -192,6 +192,7 @@ export function TaskFormPage() {
                 <option value="">请选择管段</option>
                 {segmentItems.map((item) => (
                   <option key={item.id} value={item.id}>
+                    {item.districtName ? `[${item.districtName}${item.roadName ? ` / ${item.roadName}` : ''}] ` : ''}
                     {item.code} · {item.name}
                   </option>
                 ))}

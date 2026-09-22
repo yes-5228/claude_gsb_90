@@ -18,6 +18,7 @@ import (
 	"github.com/drainage/desilting/internal/modules/acceptance"
 	"github.com/drainage/desilting/internal/modules/cleaningrecord"
 	"github.com/drainage/desilting/internal/modules/cleaningtask"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 	"github.com/drainage/desilting/internal/shared/date"
 )
@@ -56,45 +57,62 @@ func NewDB(t *testing.T) *gorm.DB {
 
 // Services 一套装配完成的业务服务，等价于 router 中的生产装配方式。
 type Services struct {
+	Hierarchy   *hierarchy.Service
 	Segments    *pipesegment.Service
 	Tasks       *cleaningtask.Service
 	Records     *cleaningrecord.Service
 	Acceptances *acceptance.Service
 }
 
+// testGateways 测试用的层级网关适配，逻辑与 router 中保持一致。
+type testGateways struct{ h *hierarchy.Service }
+
 // NewServices 按生产环境的依赖顺序装配服务。
 func NewServices(db *gorm.DB) *Services {
-	segments := pipesegment.NewService(pipesegment.NewRepository(db))
-	tasks := cleaningtask.NewService(cleaningtask.NewRepository(db), segments)
-	records := cleaningrecord.NewService(cleaningrecord.NewRepository(db), tasks)
-	acceptances := acceptance.NewService(acceptance.NewRepository(db), tasks, segments, records)
-	return &Services{Segments: segments, Tasks: tasks, Records: records, Acceptances: acceptances}
+	hier := hierarchy.NewService(hierarchy.NewRepository(db))
+	segments := pipesegment.NewService(pipesegment.NewRepository(db), hierarchySegmentGateway{h: hier})
+	tasks := cleaningtask.NewService(cleaningtask.NewRepository(db), segments, hierarchyTaskGateway{h: hier})
+	records := cleaningrecord.NewService(cleaningrecord.NewRepository(db), tasks, hierarchyRecordGateway{h: hier})
+	acceptances := acceptance.NewService(acceptance.NewRepository(db), tasks, segments, records, hierarchyAcceptanceGateway{h: hier})
+	return &Services{Hierarchy: hier, Segments: segments, Tasks: tasks, Records: records, Acceptances: acceptances}
 }
 
-// Fixture 内存库 + 服务 + 默认管段的组合，方便测试用例直接使用。
+// Fixture 内存库 + 服务 + 默认片区 / 道路 / 管段的组合，方便测试用例直接使用。
 type Fixture struct {
 	*Services
-	DB      *gorm.DB
-	Segment *pipesegment.PipeSegment
+	DB       *gorm.DB
+	District *hierarchy.District
+	Road     *hierarchy.Road
+	Segment  *pipesegment.PipeSegment
 }
 
-// NewFixture 建库、装配服务并创建一条默认管段。
+// NewFixture 建库、装配服务并创建默认片区、道路与管段。
 func NewFixture(t *testing.T) *Fixture {
 	t.Helper()
 	db := NewDB(t)
 	services := NewServices(db)
-	segment := services.CreateSegment(t, "PS-TEST-001", "城东片区")
-	return &Fixture{Services: services, DB: db, Segment: segment}
+	district, err := services.Hierarchy.CreateDistrict(context.Background(), hierarchy.SaveDistrictRequest{Name: "城东片区"})
+	if err != nil {
+		t.Fatalf("创建测试片区失败: %v", err)
+	}
+	road, err := services.Hierarchy.CreateRoad(context.Background(), hierarchy.SaveRoadRequest{
+		DistrictID: district.ID, Name: "测试道路",
+	})
+	if err != nil {
+		t.Fatalf("创建测试道路失败: %v", err)
+	}
+	segment := services.CreateSegment(t, "PS-TEST-001", district.ID, &road.ID)
+	return &Fixture{Services: services, DB: db, District: district, Road: road, Segment: segment}
 }
 
 // CreateSegment 创建一条管段。
-func (s *Services) CreateSegment(t *testing.T, code, district string) *pipesegment.PipeSegment {
+func (s *Services) CreateSegment(t *testing.T, code string, districtID uint, roadID *uint) *pipesegment.PipeSegment {
 	t.Helper()
 	segment, err := s.Segments.Create(context.Background(), pipesegment.SaveRequest{
 		Code:         code,
 		Name:         "测试管段 " + code,
-		District:     district,
-		RoadName:     "测试道路",
+		DistrictID:   districtID,
+		RoadID:       derefRoad(roadID),
 		PipeType:     pipesegment.TypeRainwater,
 		Material:     "concrete",
 		DiameterMm:   600,
@@ -108,6 +126,13 @@ func (s *Services) CreateSegment(t *testing.T, code, district string) *pipesegme
 		t.Fatalf("创建测试管段失败: %v", err)
 	}
 	return segment
+}
+
+func derefRoad(roadID *uint) uint {
+	if roadID == nil {
+		return 0
+	}
+	return *roadID
 }
 
 // CreateTask 创建一条待开工的清淤任务（计划开始日期为 3 天前）。

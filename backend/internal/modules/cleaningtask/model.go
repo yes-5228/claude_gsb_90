@@ -33,27 +33,34 @@ const (
 )
 
 // CleaningTask 清淤任务。
+//
+// 任务登记时固化一份层级名称快照（DistrictSnapshot* / RoadSnapshot*），
+// 之后片区改名或道路归属调整不改变任务的历史展示口径。
 type CleaningTask struct {
-	ID            uint       `gorm:"primaryKey" json:"id"`
-	Code          string     `gorm:"size:32;uniqueIndex;not null" json:"code"`
-	Title         string     `gorm:"size:128;not null" json:"title"`
-	PipeSegmentID uint       `gorm:"index;not null" json:"pipeSegmentId"`
-	Priority      string     `gorm:"size:16;index;not null;default:normal" json:"priority"`
-	Source        string     `gorm:"size:16;index;not null;default:plan" json:"source"`
-	Method        string     `gorm:"size:24" json:"method"`
-	PlanStartDate date.Date  `gorm:"type:date;index;not null" json:"planStartDate"`
-	PlanEndDate   date.Date  `gorm:"type:date;index;not null" json:"planEndDate"`
-	TeamName      string     `gorm:"size:64" json:"teamName"`
-	LeaderName    string     `gorm:"size:32" json:"leaderName"`
-	LeaderPhone   string     `gorm:"size:32" json:"leaderPhone"`
-	Status        string     `gorm:"size:16;index;not null;default:pending" json:"status"`
-	Description   string     `gorm:"type:text" json:"description"`
-	StartedAt     *time.Time `json:"startedAt"`
-	FinishedAt    *time.Time `json:"finishedAt"`
-	AcceptedAt    *time.Time `json:"acceptedAt"`
-	CancelReason  string     `gorm:"size:255" json:"cancelReason"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	Code               string     `gorm:"size:32;uniqueIndex;not null" json:"code"`
+	Title              string     `gorm:"size:128;not null" json:"title"`
+	PipeSegmentID      uint       `gorm:"index;not null" json:"pipeSegmentId"`
+	DistrictSnapshotID uint       `gorm:"index" json:"-"`
+	DistrictSnapshot   string     `gorm:"size:64" json:"districtSnapshot"`
+	RoadSnapshotID     *uint      `gorm:"index" json:"-"`
+	RoadSnapshot       string     `gorm:"size:128" json:"roadSnapshot"`
+	Priority           string     `gorm:"size:16;index;not null;default:normal" json:"priority"`
+	Source             string     `gorm:"size:16;index;not null;default:plan" json:"source"`
+	Method             string     `gorm:"size:24" json:"method"`
+	PlanStartDate      date.Date  `gorm:"type:date;index;not null" json:"planStartDate"`
+	PlanEndDate        date.Date  `gorm:"type:date;index;not null" json:"planEndDate"`
+	TeamName           string     `gorm:"size:64" json:"teamName"`
+	LeaderName         string     `gorm:"size:32" json:"leaderName"`
+	LeaderPhone        string     `gorm:"size:32" json:"leaderPhone"`
+	Status             string     `gorm:"size:16;index;not null;default:pending" json:"status"`
+	Description        string     `gorm:"type:text" json:"description"`
+	StartedAt          *time.Time `json:"startedAt"`
+	FinishedAt         *time.Time `json:"finishedAt"`
+	AcceptedAt         *time.Time `json:"acceptedAt"`
+	CancelReason       string     `gorm:"size:255" json:"cancelReason"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
 }
 
 // TableName 指定表名。

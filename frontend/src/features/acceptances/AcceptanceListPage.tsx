@@ -1,8 +1,9 @@
-// 验收记录列表：按结论、验收人、验收日期与整改状态检索。
+// 验收记录列表：按结论、片区 / 道路（多选）、验收人、验收日期与整改状态检索。
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { acceptanceApi } from '../../api/acceptances';
 import { DataTable, type Column } from '../../components/DataTable';
+import { HierarchyFilter } from '../../components/HierarchyFilter';
 import { PageHeader } from '../../components/PageHeader';
 import { Pagination } from '../../components/Pagination';
 import { SectionCard } from '../../components/SectionCard';
@@ -14,6 +15,16 @@ import { formatDate, formatNumber } from '../../utils/format';
 
 const PAGE_SIZE = 10;
 
+function parseIds(raw: string | null): number[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
 export function AcceptanceListPage() {
   const navigate = useNavigate();
   const { enums } = useMeta();
@@ -21,6 +32,8 @@ export function AcceptanceListPage() {
 
   const keyword = params.get('keyword') ?? '';
   const result = params.get('result') ?? '';
+  const districtIds = parseIds(params.get('districtIds'));
+  const roadIds = parseIds(params.get('roadIds'));
   const inspectorName = params.get('inspectorName') ?? '';
   const dateFrom = params.get('dateFrom') ?? '';
   const dateTo = params.get('dateTo') ?? '';
@@ -37,6 +50,8 @@ export function AcceptanceListPage() {
       acceptanceApi.list({
         keyword,
         result,
+        districtIds: districtIds.length ? districtIds : undefined,
+        roadIds: roadIds.length ? roadIds : undefined,
         inspectorName,
         dateFrom,
         dateTo,
@@ -44,8 +59,24 @@ export function AcceptanceListPage() {
         page,
         pageSize: PAGE_SIZE
       }),
-    [keyword, result, inspectorName, dateFrom, dateTo, pendingRectify, page]
+    [keyword, result, districtIds.join(','), roadIds.join(','), inspectorName, dateFrom, dateTo, pendingRectify, page]
   );
+
+  const applyHierarchy = (next: { districtIds: number[]; roadIds: number[] }) => {
+    const query = new URLSearchParams(params);
+    if (next.districtIds.length) {
+      query.set('districtIds', next.districtIds.join(','));
+    } else {
+      query.delete('districtIds');
+    }
+    if (next.roadIds.length) {
+      query.set('roadIds', next.roadIds.join(','));
+    } else {
+      query.delete('roadIds');
+    }
+    query.set('page', '1');
+    setParams(query);
+  };
 
   const applyFilter = (patch: Record<string, string>) => {
     const next = new URLSearchParams(params);
@@ -82,13 +113,17 @@ export function AcceptanceListPage() {
     },
     {
       key: 'task',
-      title: '所属任务 / 管段',
-      width: '230px',
+      title: '所属任务 / 管段 / 层级',
+      width: '250px',
       render: (row) => (
         <>
           <span>{row.task?.title ?? '—'}</span>
           <span className="cell-sub">
             {row.task ? `${row.task.code} · ${row.task.segmentCode} ${row.task.segmentName}` : '任务已删除'}
+          </span>
+          <span className="cell-sub">
+            {row.districtSnapshot}
+            {row.roadSnapshot ? ` · ${row.roadSnapshot}` : ''}
           </span>
         </>
       )
@@ -240,6 +275,7 @@ export function AcceptanceListPage() {
                 <option value="true">仅看待整改</option>
               </select>
             </div>
+            <HierarchyFilter districtIds={districtIds} roadIds={roadIds} onChange={applyHierarchy} />
             <div className="filter-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setParams(new URLSearchParams())}>
                 重置

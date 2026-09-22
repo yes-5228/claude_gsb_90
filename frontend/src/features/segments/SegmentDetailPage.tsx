@@ -12,6 +12,7 @@ import { StatusTag } from '../../components/StatusTag';
 import { StateBlock } from '../../components/StateBlock';
 import { useToast } from '../../components/Toast';
 import { useAsync } from '../../hooks/useAsync';
+import { useHierarchy } from '../../providers/HierarchyProvider';
 import type { SegmentHistoryItem, TaskRef } from '../../types/domain';
 import { formatDate, formatDateTime, formatLength, formatNumber, formatVolume } from '../../utils/format';
 import { useState } from 'react';
@@ -61,8 +62,17 @@ export function SegmentDetailPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  const { districtById, roadById } = useHierarchy();
+
   const segment = detail.data?.segment;
   const stats = detail.data?.taskStats;
+
+  const districtName = segment
+    ? segment.districtName || districtById(segment.districtId)?.name || `片区#${segment.districtId}`
+    : '';
+  const roadName = segment
+    ? segment.roadName || (segment.roadId ? roadById(segment.roadId)?.name ?? '' : '')
+    : '';
 
   const handleDelete = async () => {
     if (!segment) {
@@ -115,8 +125,8 @@ export function SegmentDetailPage() {
                 items={[
                   { label: '管段编号', value: segment.code },
                   { label: '管段名称', value: segment.name },
-                  { label: '所属片区', value: segment.district },
-                  { label: '所在道路', value: segment.roadName || '—' },
+                  { label: '所属片区', value: districtName },
+                  { label: '所在道路', value: roadName || '—' },
                   { label: '管段类型', value: <StatusTag list="pipeTypes" value={segment.pipeType} /> },
                   { label: '管材', value: segment.material || '—' },
                   { label: '管径', value: `DN${segment.diameterMm}` },

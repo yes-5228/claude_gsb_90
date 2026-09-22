@@ -151,6 +151,12 @@ func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 	if query.Result != "" {
 		tx = tx.Where("result = ?", query.Result)
 	}
+	if len(query.DistrictIDs) > 0 {
+		tx = tx.Where("district_snapshot_id IN ?", query.DistrictIDs)
+	}
+	if len(query.RoadIDs) > 0 {
+		tx = tx.Where("road_snapshot_id IN ?", query.RoadIDs)
+	}
 	if query.InspectorName != "" {
 		tx = tx.Where("inspector_name = ?", query.InspectorName)
 	}

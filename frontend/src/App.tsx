@@ -17,43 +17,50 @@ import { TaskDetailPage } from './features/tasks/TaskDetailPage';
 import { TaskFormPage } from './features/tasks/TaskFormPage';
 import { TaskListPage } from './features/tasks/TaskListPage';
 import { MetaProvider } from './providers/MetaProvider';
+import { HierarchyProvider } from './providers/HierarchyProvider';
+import { HierarchyManagePage } from './features/hierarchy/HierarchyManagePage';
 
 export function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
         <MetaProvider>
-          <Routes>
-            <Route element={<AppLayout />}>
-              {/* 总览 */}
-              <Route index element={<DashboardPage />} />
+          <HierarchyProvider>
+            <Routes>
+              <Route element={<AppLayout />}>
+                {/* 总览 */}
+                <Route index element={<DashboardPage />} />
 
-              {/* 管段台账 */}
-              <Route path="segments" element={<SegmentListPage />} />
-              <Route path="segments/new" element={<SegmentFormPage />} />
-              <Route path="segments/:id" element={<SegmentDetailPage />} />
-              <Route path="segments/:id/edit" element={<SegmentFormPage />} />
+                {/* 片区 / 道路层级 */}
+                <Route path="hierarchy" element={<HierarchyManagePage />} />
 
-              {/* 清淤任务 */}
-              <Route path="tasks" element={<TaskListPage />} />
-              <Route path="tasks/new" element={<TaskFormPage />} />
-              <Route path="tasks/:id" element={<TaskDetailPage />} />
-              <Route path="tasks/:id/edit" element={<TaskFormPage />} />
+                {/* 管段台账 */}
+                <Route path="segments" element={<SegmentListPage />} />
+                <Route path="segments/new" element={<SegmentFormPage />} />
+                <Route path="segments/:id" element={<SegmentDetailPage />} />
+                <Route path="segments/:id/edit" element={<SegmentFormPage />} />
 
-              {/* 清淤记录 */}
-              <Route path="records" element={<RecordListPage />} />
-              <Route path="records/new" element={<RecordFormPage />} />
-              <Route path="records/:id" element={<RecordDetailPage />} />
-              <Route path="records/:id/edit" element={<RecordFormPage />} />
+                {/* 清淤任务 */}
+                <Route path="tasks" element={<TaskListPage />} />
+                <Route path="tasks/new" element={<TaskFormPage />} />
+                <Route path="tasks/:id" element={<TaskDetailPage />} />
+                <Route path="tasks/:id/edit" element={<TaskFormPage />} />
 
-              {/* 验收记录 */}
-              <Route path="acceptances" element={<AcceptanceListPage />} />
-              <Route path="acceptances/new" element={<AcceptanceFormPage />} />
-              <Route path="acceptances/:id" element={<AcceptanceDetailPage />} />
+                {/* 清淤记录 */}
+                <Route path="records" element={<RecordListPage />} />
+                <Route path="records/new" element={<RecordFormPage />} />
+                <Route path="records/:id" element={<RecordDetailPage />} />
+                <Route path="records/:id/edit" element={<RecordFormPage />} />
 
-              <Route path="*" element={<NotFoundPage />} />
-            </Route>
-          </Routes>
+                {/* 验收记录 */}
+                <Route path="acceptances" element={<AcceptanceListPage />} />
+                <Route path="acceptances/new" element={<AcceptanceFormPage />} />
+                <Route path="acceptances/:id" element={<AcceptanceDetailPage />} />
+
+                <Route path="*" element={<NotFoundPage />} />
+              </Route>
+            </Routes>
+          </HierarchyProvider>
         </MetaProvider>
       </ToastProvider>
     </BrowserRouter>

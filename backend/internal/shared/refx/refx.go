@@ -21,7 +21,88 @@ const (
 	TableCleaningTasks     = "cleaning_tasks"
 	TableCleaningRecords   = "cleaning_records"
 	TableAcceptanceRecords = "acceptance_records"
+	TableDistricts         = "districts"
+	TableRoads             = "roads"
 )
+
+// HierarchyRefs 层级节点（片区 / 道路）被业务数据引用的计数。
+//
+// 用于层级删除保护：只要管段、任务、清淤记录或验收记录中还残留该层级的快照引用，
+// 就不允许直接删除。
+type HierarchyRefs struct {
+	SegmentCount int64
+	TaskCount    int64
+	RecordCount  int64
+	AcceptCount  int64
+}
+
+// Referenced 是否存在任意引用。
+func (r HierarchyRefs) Referenced() bool {
+	return r.SegmentCount > 0 || r.TaskCount > 0 || r.RecordCount > 0 || r.AcceptCount > 0
+}
+
+func countRefs(ctx context.Context, db *gorm.DB, column string, id uint, tables ...string) (int64, error) {
+	var total int64
+	for _, table := range tables {
+		var count int64
+		if err := db.WithContext(ctx).Table(table).Where(column+" = ?", id).Count(&count).Error; err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+// DistrictRefs 统计片区在各业务表（含层级快照列）中的引用数量。
+//
+// 管段直接引用 district_id；任务 / 记录 / 验收登记时固化的快照为 district_snapshot_id。
+func DistrictRefs(ctx context.Context, db *gorm.DB, districtID uint) (HierarchyRefs, error) {
+	refs := HierarchyRefs{}
+	var err error
+	if refs.SegmentCount, err = countRefs(ctx, db, "district_id", districtID, TablePipeSegments); err != nil {
+		return refs, err
+	}
+	if refs.TaskCount, err = countRefs(ctx, db, "district_snapshot_id", districtID, TableCleaningTasks); err != nil {
+		return refs, err
+	}
+	if refs.RecordCount, err = countRefs(ctx, db, "district_snapshot_id", districtID, TableCleaningRecords); err != nil {
+		return refs, err
+	}
+	if refs.AcceptCount, err = countRefs(ctx, db, "district_snapshot_id", districtID, TableAcceptanceRecords); err != nil {
+		return refs, err
+	}
+	return refs, nil
+}
+
+// RoadRefs 统计道路在各业务表（含层级快照列）中的引用数量。
+//
+// 道路快照可空，未挂道路的数据 road_snapshot_id 为 NULL，不会被计入。
+func RoadRefs(ctx context.Context, db *gorm.DB, roadID uint) (HierarchyRefs, error) {
+	refs := HierarchyRefs{}
+	var err error
+	if refs.SegmentCount, err = countRefs(ctx, db, "road_id", roadID, TablePipeSegments); err != nil {
+		return refs, err
+	}
+	if refs.TaskCount, err = countRefs(ctx, db, "road_snapshot_id", roadID, TableCleaningTasks); err != nil {
+		return refs, err
+	}
+	if refs.RecordCount, err = countRefs(ctx, db, "road_snapshot_id", roadID, TableCleaningRecords); err != nil {
+		return refs, err
+	}
+	if refs.AcceptCount, err = countRefs(ctx, db, "road_snapshot_id", roadID, TableAcceptanceRecords); err != nil {
+		return refs, err
+	}
+	return refs, nil
+}
+
+// SegmentsInDistrict 返回片区下（直接挂载）的管段 ID。
+func SegmentsInDistrict(ctx context.Context, db *gorm.DB, districtID uint) ([]uint, error) {
+	ids := make([]uint, 0)
+	err := db.WithContext(ctx).Table(TablePipeSegments).
+		Where("district_id = ?", districtID).
+		Pluck("id", &ids).Error
+	return ids, err
+}
 
 // TaskStats 某个管段下的清淤任务数量汇总。
 type TaskStats struct {

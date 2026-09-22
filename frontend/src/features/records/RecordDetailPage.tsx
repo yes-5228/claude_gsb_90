@@ -121,7 +121,12 @@ export function RecordDetailPage() {
                     { label: '优先级', value: <StatusTag list="taskPriorities" value={task.priority} /> },
                     { label: '实施班组', value: task.teamName || '—' },
                     { label: '关联管段', value: `${task.segmentCode} · ${task.segmentName}` },
-                    { label: '所属片区', value: task.segmentDistrict || '—' }
+                    {
+                      label: '层级（登记当时）',
+                      value: record?.districtSnapshot
+                        ? `${record.districtSnapshot}${record.roadSnapshot ? ` · ${record.roadSnapshot}` : ''}`
+                        : task.segmentDistrict || '—'
+                    }
                   ]}
                 />
               ) : (

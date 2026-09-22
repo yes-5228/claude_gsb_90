@@ -10,11 +10,14 @@
 | 模块 | 页面 | 说明 |
 | --- | --- | --- |
 | 运行看板 | `/` | 跨模块汇总管段、任务、清淤量、验收合格率，含待验收任务与分片区统计 |
-| 管段台账 | `/segments`、`/segments/new`、`/segments/:id`、`/segments/:id/edit` | 管段档案维护、任务概况、清淤履历（计划 → 记录 → 验收） |
+| 片区 / 道路层级 | `/hierarchy` | 两级层级的新增、改名、归属调整、批量调整、删除与变更记录 |
+| 管段台账 | `/segments`、`/segments/new`、`/segments/:id`、`/segments/:id/edit` | 管段档案维护、任务概况、清淤履历（计划 → 记录 → 验收），片区 / 道路从统一层级选择 |
 | 清淤任务 | `/tasks`、`/tasks/new`、`/tasks/:id`、`/tasks/:id/edit` | 任务登记、开工 / 完工报验 / 取消、任务下清淤记录与验收结论 |
 | 清淤记录 | `/records`、`/records/new`、`/records/:id`、`/records/:id/edit` | 按次录入现场数据（长度、清淤量、用水量、人数、设备、安全措施等） |
 | 验收记录 | `/acceptances`、`/acceptances/new`、`/acceptances/:id` | 登记验收结论、整改跟踪、复验 |
 | 枚举字典 | `/api/v1/meta/enums` | 后端统一下发全部枚举中文标签，前端不硬编码文案 |
+| 层级树 | `/api/v1/hierarchy/tree` | 片区 / 道路两级层级，台账、任务、记录、看板共用同一套层级 |
+| 层级变更记录 | `/api/v1/hierarchy/change-logs` | 新增、改名、归属调整、删除逐条留痕，同一次批量调整共用一个批次号 |
 
 ## 技术栈
 
@@ -34,6 +37,7 @@
 │   │   ├── httpx/                   # 统一信封、错误码、字段校验、分页
 │   │   ├── middleware/              # 请求 ID、访问日志、Recover、CORS
 │   │   ├── modules/                 # 业务模块（每个模块 model/dto/repository/service/handler/routes）
+│   │   │   ├── hierarchy/           # 片区 / 道路层级与变更日志
 │   │   │   ├── pipesegment/         # 管段台账
 │   │   │   ├── cleaningtask/        # 清淤任务（含状态机）
 │   │   │   ├── cleaningrecord/      # 清淤记录
@@ -47,11 +51,11 @@
 ├── frontend/                        # React 前端
 │   ├── src/
 │   │   ├── api/                     # 接口封装（统一拆信封、抛 ApiError）
-│   │   ├── components/              # 通用组件（布局、表格、分页、弹窗、标签、Toast 等）
+│   │   ├── components/              # 通用组件（布局、表格、分页、弹窗、层级多选筛选、Toast 等）
 │   │   ├── features/                # 按业务模块拆分的页面
-│   │   │   ├── dashboard/  segments/  tasks/  records/  acceptances/
+│   │   │   ├── hierarchy/  dashboard/  segments/  tasks/  records/  acceptances/
 │   │   ├── hooks/                   # useAsync / useForm
-│   │   ├── providers/               # 枚举字典 Provider
+│   │   ├── providers/               # 枚举字典 Provider + 层级树 Provider（共用同一套层级）
 │   │   ├── styles/                  # 全局样式
 │   │   ├── types/                   # 与后端一一对应的领域类型
 │   │   └── utils/                   # 日期、数字、枚举标签格式化
@@ -132,34 +136,51 @@ npm run dev            # http://localhost:5173
 | --- | --- | --- |
 | GET | `/healthz` | 健康检查（环境、数据库、运行时长） |
 | GET | `/api/v1/meta/enums` | 全部枚举字典 |
+| GET | `/api/v1/hierarchy/tree` | 片区 / 道路层级树 |
+| POST | `/api/v1/hierarchy/districts` · `/hierarchy/roads` | 新增片区 / 道路 |
+| PUT | `/api/v1/hierarchy/districts/:id/rename` · `/hierarchy/roads/:id/rename` | 片区 / 道路改名（写变更记录） |
+| PUT | `/api/v1/hierarchy/roads/:id/move` | 道路归属调整，引用该道路的管段一并迁移（单事务） |
+| DELETE | `/api/v1/hierarchy/districts/:id` · `/hierarchy/roads/:id` | 删除层级（被引用时拒绝，返回 409） |
+| GET | `/api/v1/hierarchy/districts/:id/refs` · `/hierarchy/roads/:id/refs` | 层级被管段 / 任务 / 记录 / 验收引用的计数 |
+| POST | `/api/v1/hierarchy/adjustments` | 批量层级调整：一个事务内全部生效，任一失败整体回滚 |
+| GET | `/api/v1/hierarchy/change-logs` | 层级变更记录（`nodeType` `action` `batchId` 分页） |
 | GET | `/api/v1/dashboard/overview` | 看板总览指标 |
-| GET | `/api/v1/dashboard/district-stats` | 分片区统计 |
+| GET | `/api/v1/dashboard/district-stats` | 分片区统计（按当前层级口径） |
 | GET | `/api/v1/dashboard/pending-acceptance?limit=8` | 待验收任务 |
 | GET | `/api/v1/dashboard/recent-records?limit=8` | 最近清淤记录 |
-| GET | `/api/v1/pipe-segments` | 管段列表（`keyword` `district` `pipeType` `status` `page` `pageSize`） |
-| GET | `/api/v1/pipe-segments/options` | 管段下拉选项 + 已有片区 |
+| GET | `/api/v1/pipe-segments` | 管段列表（`keyword` `districtIds` `roadIds` `pipeType` `status`，层级参数支持多选 / 全选） |
+| GET | `/api/v1/pipe-segments/options` | 管段下拉选项（名称含当前片区 / 道路） |
 | GET | `/api/v1/pipe-segments/:id` | 管段详情（含任务统计与最近任务） |
 | GET | `/api/v1/pipe-segments/:id/cleaning-history` | 管段清淤履历 |
-| POST/PUT/DELETE | `/api/v1/pipe-segments[/:id]` | 新增 / 修改 / 删除管段 |
-| GET | `/api/v1/cleaning-tasks` | 任务列表（`keyword` `status` `district` `priority` `source` `pipeSegmentId` `planFrom` `planTo`） |
-| GET | `/api/v1/cleaning-tasks/:id` | 任务详情（含清淤汇总、验收结论、可执行动作） |
-| POST/PUT/DELETE | `/api/v1/cleaning-tasks[/:id]` | 登记 / 修改 / 删除任务 |
+| POST/PUT/DELETE | `/api/v1/pipe-segments[/:id]` | 新增 / 修改 / 删除管段（片区 / 道路必须来自层级树） |
+| GET | `/api/v1/cleaning-tasks` | 任务列表（`keyword` `status` `districtIds` `roadIds` `priority` `source` `pipeSegmentId` `planFrom` `planTo`，按登记当时的层级快照过滤） |
+| GET | `/api/v1/cleaning-tasks/:id` | 任务详情（含清淤汇总、验收结论、可执行动作、层级名称快照） |
+| POST/PUT/DELETE | `/api/v1/cleaning-tasks[/:id]` | 登记 / 修改 / 删除任务（登记时固化层级快照） |
 | POST | `/api/v1/cleaning-tasks/:id/start` | 开工（待开工 → 清淤中） |
 | POST | `/api/v1/cleaning-tasks/:id/complete` | 完工报验（清淤中 → 待验收，需至少 1 条清淤记录） |
 | POST | `/api/v1/cleaning-tasks/:id/cancel` | 取消任务（需填写取消原因） |
-| GET | `/api/v1/cleaning-records` | 记录列表（`keyword` `taskId` `segmentId` `method` `weather` `dateFrom` `dateTo`） |
-| GET | `/api/v1/cleaning-records/:id` | 记录详情（含所属任务与管段） |
-| POST/PUT/DELETE | `/api/v1/cleaning-records[/:id]` | 录入 / 修改 / 删除清淤记录 |
-| GET | `/api/v1/acceptances` | 验收列表（`keyword` `taskId` `segmentId` `result` `inspectorName` `dateFrom` `dateTo` `pendingRectify`） |
-| GET | `/api/v1/acceptances/:id` | 验收详情（含任务与清淤汇总） |
-| POST | `/api/v1/acceptances` | 登记验收结论 |
+| GET | `/api/v1/cleaning-records` | 记录列表（`keyword` `taskId` `segmentId` `districtIds` `roadIds` `method` `weather` `dateFrom` `dateTo`，按登记当时快照过滤） |
+| GET | `/api/v1/cleaning-records/:id` | 记录详情（含所属任务、管段与层级名称快照） |
+| POST/PUT/DELETE | `/api/v1/cleaning-records[/:id]` | 录入 / 修改 / 删除清淤记录（登记时固化层级快照） |
+| GET | `/api/v1/acceptances` | 验收列表（`keyword` `taskId` `segmentId` `districtIds` `roadIds` `result` `inspectorName` `dateFrom` `dateTo` `pendingRectify`） |
+| GET | `/api/v1/acceptances/:id` | 验收详情（含任务、清淤汇总与层级名称快照） |
+| POST | `/api/v1/acceptances` | 登记验收结论（登记时固化层级快照） |
 | POST | `/api/v1/acceptances/:id/rectify` | 登记整改完成 |
 | DELETE | `/api/v1/acceptances/:id` | 删除验收记录（合格结论不允许删除） |
 
 ## 数据模型与状态流转
 
-业务依赖方向单向：**清淤记录 → 清淤任务 → 管段台账**；验收记录同时依赖任务、管段与清淤记录。
+业务依赖方向单向：**清淤记录 → 清淤任务 → 管段台账 → 片区 / 道路层级**；验收记录同时依赖任务、管段、层级与清淤记录。
 跨模块的反向引用检查与跨表统计统一收敛在 `internal/shared/refx`，避免模块间循环依赖。
+
+### 片区 / 道路层级
+
+- 片区（District）与道路（Road）组成两级层级，管段通过 `district_id` / `road_id` 引用，是台账、任务、记录、看板共用的唯一层级来源。
+- 新增、改名、归属调整、删除全部收敛在 `internal/modules/hierarchy`，逐条写入 `hierarchy_change_logs`（同一次批量调整共用一个 `batch_id`，含操作人与原因、前后 JSON 快照）。
+- 批量调整在单个数据库事务内完成，按主键顺序加锁，任何一项不合法都整体回滚，不会部分成功；道路归属调整时引用该道路的管段会一并迁移。
+- 被管段、任务、清淤记录或验收记录引用的层级不允许直接删除（返回 409，并给出各类引用计数）；片区下仍有道路时也拒绝删除。
+- 任务 / 清淤记录 / 验收记录在登记当时固化层级名称快照（`district_snapshot` / `road_snapshot`），片区改名或道路归属调整后历史数据仍按登记当时的层级展示；登记快照与层级调整通过行锁互斥，调整期间正在录入的数据只会取调整前或调整后其中一个确定口径。
+- 升级旧版本（自由文本片区 / 道路）时，迁移逻辑会按同名归并自动建立层级并回填各表快照，迁移幂等。
 
 清淤任务状态机（`internal/modules/cleaningtask/status.go` 唯一定义）：
 

@@ -8,10 +8,16 @@ import (
 )
 
 // CleaningRecord 清淤记录。
+//
+// 记录登记时按任务所属管段当时的层级固化名称快照，层级后续调整不影响历史展示。
 type CleaningRecord struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
 	Code               string    `gorm:"size:32;uniqueIndex;not null" json:"code"`
 	TaskID             uint      `gorm:"index;not null" json:"taskId"`
+	DistrictSnapshotID uint      `gorm:"index" json:"-"`
+	DistrictSnapshot   string    `gorm:"size:64" json:"districtSnapshot"`
+	RoadSnapshotID     *uint     `gorm:"index" json:"-"`
+	RoadSnapshot       string    `gorm:"size:128" json:"roadSnapshot"`
 	CleanedAt          date.Date `gorm:"type:date;index;not null" json:"cleanedAt"`
 	LengthM            float64   `gorm:"not null" json:"lengthM"`
 	SludgeVolumeM3     float64   `gorm:"not null" json:"sludgeVolumeM3"`

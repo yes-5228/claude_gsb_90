@@ -37,9 +37,19 @@ func (r *Repository) Create(ctx context.Context, task *CleaningTask) error {
 	return r.db.WithContext(ctx).Create(task).Error
 }
 
+// CreateTx 在给定事务内新增任务（与层级快照读取同事务）。
+func (r *Repository) CreateTx(ctx context.Context, tx *gorm.DB, task *CleaningTask) error {
+	return tx.WithContext(ctx).Create(task).Error
+}
+
 // Save 保存任务全部字段。
 func (r *Repository) Save(ctx context.Context, task *CleaningTask) error {
 	return r.db.WithContext(ctx).Save(task).Error
+}
+
+// SaveTx 在给定事务内保存任务（更换管段时与层级快照同事务更新）。
+func (r *Repository) SaveTx(ctx context.Context, tx *gorm.DB, task *CleaningTask) error {
+	return tx.WithContext(ctx).Save(task).Error
 }
 
 // Delete 物理删除任务。
@@ -151,11 +161,12 @@ func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 	if query.PipeSegmentID > 0 {
 		tx = tx.Where("pipe_segment_id = ?", query.PipeSegmentID)
 	}
-	if query.District != "" {
-		subQuery := r.db.WithContext(ctx).Table(refx.TablePipeSegments).
-			Select("id").
-			Where("district = ?", query.District)
-		tx = tx.Where("pipe_segment_id IN (?)", subQuery)
+	// 片区 / 道路按任务登记当时固化的层级快照过滤，与列表展示口径一致。
+	if len(query.DistrictIDs) > 0 {
+		tx = tx.Where("district_snapshot_id IN ?", query.DistrictIDs)
+	}
+	if len(query.RoadIDs) > 0 {
+		tx = tx.Where("road_snapshot_id IN ?", query.RoadIDs)
 	}
 	if query.PlanFrom != nil {
 		tx = tx.Where("plan_start_date >= ?", query.PlanFrom.Time)

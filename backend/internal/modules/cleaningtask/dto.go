@@ -31,11 +31,12 @@ type CancelRequest struct {
 	Reason string `json:"reason" label:"取消原因" validate:"required,max=255"`
 }
 
-// ListQuery 任务列表查询条件。
+// ListQuery 任务列表查询条件。片区 / 道路按登记当时的层级快照多选过滤。
 type ListQuery struct {
 	Keyword       string
 	Status        string
-	District      string
+	DistrictIDs   []uint
+	RoadIDs       []uint
 	Priority      string
 	Source        string
 	PipeSegmentID uint
@@ -49,7 +50,8 @@ func ParseListQuery(c *fiber.Ctx) (ListQuery, error) {
 	query := ListQuery{
 		Keyword:       httpx.TrimmedQuery(c, "keyword"),
 		Status:        httpx.TrimmedQuery(c, "status"),
-		District:      httpx.TrimmedQuery(c, "district"),
+		DistrictIDs:   httpx.ParseIDList(c, "districtIds"),
+		RoadIDs:       httpx.ParseIDList(c, "roadIds"),
 		Priority:      httpx.TrimmedQuery(c, "priority"),
 		Source:        httpx.TrimmedQuery(c, "source"),
 		PipeSegmentID: uint(c.QueryInt("pipeSegmentId", 0)),

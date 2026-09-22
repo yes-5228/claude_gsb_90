@@ -49,6 +49,10 @@ const pendingColumns: Column<PendingAcceptanceItem>[] = [
         <span className="cell-sub">
           {row.segmentCode} · {row.segmentName}
         </span>
+        <span className="cell-sub">
+          {row.segmentDistrict}
+          {row.segmentRoad ? ` · ${row.segmentRoad}` : ''}
+        </span>
       </>
     )
   },
@@ -85,6 +89,10 @@ const recentColumns: Column<RecentRecordItem>[] = [
         <span>{row.taskTitle}</span>
         <span className="cell-sub">
           {row.segmentCode} · {row.segmentName}
+        </span>
+        <span className="cell-sub">
+          {row.segmentDistrict}
+          {row.segmentRoad ? ` · ${row.segmentRoad}` : ''}
         </span>
       </>
     )
@@ -123,7 +131,6 @@ export function DashboardPage() {
     { key: 'sludgeVolumeM3', title: '清淤量', align: 'right', render: (row) => formatVolume(row.sludgeVolumeM3) },
     { key: 'lastCleanedAt', title: '最近清淤', align: 'right', render: (row) => formatDate(row.lastCleanedAt) }
   ];
-
   return (
     <div className="page">
       <PageHeader
@@ -239,7 +246,7 @@ export function DashboardPage() {
             <DataTable
               columns={districtColumns}
               rows={districts.data ?? []}
-              rowKey={(row) => row.district}
+              rowKey={(row) => row.districtId}
               loading={districts.loading}
               error={districts.error}
               onRetry={districts.reload}

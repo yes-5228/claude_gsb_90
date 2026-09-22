@@ -1,10 +1,11 @@
-// 管段台账列表：按片区、类型、状态与关键字检索，支持新增 / 编辑 / 删除。
+// 管段台账列表：按片区 / 道路（多选 + 全选）、类型、状态与关键字检索，支持新增 / 编辑 / 删除。
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toErrorMessage } from '../../api/client';
 import { segmentApi } from '../../api/pipesegments';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { DataTable, type Column } from '../../components/DataTable';
+import { HierarchyFilter } from '../../components/HierarchyFilter';
 import { PageHeader } from '../../components/PageHeader';
 import { Pagination } from '../../components/Pagination';
 import { SectionCard } from '../../components/SectionCard';
@@ -12,19 +13,32 @@ import { StatusTag } from '../../components/StatusTag';
 import { useToast } from '../../components/Toast';
 import { useAsync } from '../../hooks/useAsync';
 import { useMeta } from '../../providers/MetaProvider';
+import { useHierarchy } from '../../providers/HierarchyProvider';
 import type { PipeSegment } from '../../types/domain';
 import { formatDate, formatLength, formatNumber } from '../../utils/format';
 
 const PAGE_SIZE = 10;
 
+function parseIds(raw: string | null): number[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
 export function SegmentListPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const { enums } = useMeta();
+  const { districtById, roadById } = useHierarchy();
   const [params, setParams] = useSearchParams();
 
   const keyword = params.get('keyword') ?? '';
-  const district = params.get('district') ?? '';
+  const districtIds = parseIds(params.get('districtIds'));
+  const roadIds = parseIds(params.get('roadIds'));
   const pipeType = params.get('pipeType') ?? '';
   const status = params.get('status') ?? '';
   const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
@@ -35,10 +49,18 @@ export function SegmentListPage() {
   }, [keyword]);
 
   const list = useAsync(
-    () => segmentApi.list({ keyword, district, pipeType, status, page, pageSize: PAGE_SIZE }),
-    [keyword, district, pipeType, status, page]
+    () =>
+      segmentApi.list({
+        keyword,
+        districtIds: districtIds.length ? districtIds : undefined,
+        roadIds: roadIds.length ? roadIds : undefined,
+        pipeType,
+        status,
+        page,
+        pageSize: PAGE_SIZE
+      }),
+    [keyword, districtIds.join(','), roadIds.join(','), pipeType, status, page]
   );
-  const options = useAsync(() => segmentApi.options(), []);
 
   const [pendingDelete, setPendingDelete] = useState<PipeSegment | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -54,6 +76,22 @@ export function SegmentListPage() {
     });
     next.set('page', '1');
     setParams(next);
+  };
+
+  const applyHierarchy = (next: { districtIds: number[]; roadIds: number[] }) => {
+    const query = new URLSearchParams(params);
+    if (next.districtIds.length) {
+      query.set('districtIds', next.districtIds.join(','));
+    } else {
+      query.delete('districtIds');
+    }
+    if (next.roadIds.length) {
+      query.set('roadIds', next.roadIds.join(','));
+    } else {
+      query.delete('roadIds');
+    }
+    query.set('page', '1');
+    setParams(query);
   };
 
   const goPage = (nextPage: number) => {
@@ -72,7 +110,6 @@ export function SegmentListPage() {
       toast.success(`管段 ${pendingDelete.code} 已删除`);
       setPendingDelete(null);
       list.reload();
-      options.reload();
     } catch (cause: unknown) {
       toast.error(toErrorMessage(cause));
     } finally {
@@ -99,8 +136,10 @@ export function SegmentListPage() {
       title: '片区 / 道路',
       render: (row) => (
         <>
-          <span>{row.district}</span>
-          <span className="cell-sub">{row.roadName || '—'}</span>
+          <span>{row.districtName || districtById(row.districtId)?.name || `片区#${row.districtId}`}</span>
+          <span className="cell-sub">
+            {row.roadName || (row.roadId ? roadById(row.roadId)?.name ?? '' : '') || '—'}
+          </span>
         </>
       )
     },
@@ -194,21 +233,7 @@ export function SegmentListPage() {
                 }}
               />
             </div>
-            <div className="filter-item">
-              <span className="filter-label">所属片区</span>
-              <select
-                className="select"
-                value={district}
-                onChange={(event) => applyFilter({ district: event.target.value })}
-              >
-                <option value="">全部片区</option>
-                {(options.data?.districts ?? []).map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <HierarchyFilter districtIds={districtIds} roadIds={roadIds} onChange={applyHierarchy} />
             <div className="filter-item">
               <span className="filter-label">管段类型</span>
               <select

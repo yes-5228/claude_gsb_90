@@ -4,7 +4,8 @@ import { buildQuery, http } from './client';
 export interface TaskQuery {
   keyword?: string;
   status?: string;
-  district?: string;
+  districtIds?: number[];
+  roadIds?: number[];
   priority?: string;
   source?: string;
   pipeSegmentId?: number;
@@ -15,7 +16,22 @@ export interface TaskQuery {
 }
 
 export const taskApi = {
-  list: (query: TaskQuery) => http.get<PageResult<TaskListItem>>(`/cleaning-tasks${buildQuery({ ...query })}`),
+  list: (query: TaskQuery) =>
+    http.get<PageResult<TaskListItem>>(
+      `/cleaning-tasks${buildQuery({
+        keyword: query.keyword,
+        status: query.status,
+        districtIds: query.districtIds,
+        roadIds: query.roadIds,
+        priority: query.priority,
+        source: query.source,
+        pipeSegmentId: query.pipeSegmentId,
+        planFrom: query.planFrom,
+        planTo: query.planTo,
+        page: query.page,
+        pageSize: query.pageSize
+      })}`
+    ),
   detail: (id: number) => http.get<TaskDetail>(`/cleaning-tasks/${id}`),
   create: (payload: TaskPayload) => http.post<{ id: number }>('/cleaning-tasks', payload),
   update: (id: number, payload: TaskPayload) => http.put<{ id: number }>(`/cleaning-tasks/${id}`, payload),

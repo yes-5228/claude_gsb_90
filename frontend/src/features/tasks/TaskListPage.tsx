@@ -1,10 +1,11 @@
-// 清淤任务列表：按状态、片区、优先级、来源与关键字检索。
+// 清淤任务列表：按状态、片区 / 道路（多选）、优先级、来源与关键字检索。
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toErrorMessage } from '../../api/client';
 import { taskApi } from '../../api/tasks';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { DataTable, type Column } from '../../components/DataTable';
+import { HierarchyFilter } from '../../components/HierarchyFilter';
 import { PageHeader } from '../../components/PageHeader';
 import { Pagination } from '../../components/Pagination';
 import { SectionCard } from '../../components/SectionCard';
@@ -17,6 +18,16 @@ import { formatDate, formatNumber, formatVolume } from '../../utils/format';
 
 const PAGE_SIZE = 10;
 
+function parseIds(raw: string | null): number[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
 export function TaskListPage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -25,7 +36,8 @@ export function TaskListPage() {
 
   const keyword = params.get('keyword') ?? '';
   const status = params.get('status') ?? '';
-  const district = params.get('district') ?? '';
+  const districtIds = parseIds(params.get('districtIds'));
+  const roadIds = parseIds(params.get('roadIds'));
   const priority = params.get('priority') ?? '';
   const source = params.get('source') ?? '';
   const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
@@ -36,8 +48,18 @@ export function TaskListPage() {
   }, [keyword]);
 
   const list = useAsync(
-    () => taskApi.list({ keyword, status, district, priority, source, page, pageSize: PAGE_SIZE }),
-    [keyword, status, district, priority, source, page]
+    () =>
+      taskApi.list({
+        keyword,
+        status,
+        districtIds: districtIds.length ? districtIds : undefined,
+        roadIds: roadIds.length ? roadIds : undefined,
+        priority,
+        source,
+        page,
+        pageSize: PAGE_SIZE
+      }),
+    [keyword, status, districtIds.join(','), roadIds.join(','), priority, source, page]
   );
 
   const [pendingDelete, setPendingDelete] = useState<TaskListItem | null>(null);
@@ -60,6 +82,22 @@ export function TaskListPage() {
     const next = new URLSearchParams(params);
     next.set('page', String(nextPage));
     setParams(next);
+  };
+
+  const applyHierarchy = (next: { districtIds: number[]; roadIds: number[] }) => {
+    const query = new URLSearchParams(params);
+    if (next.districtIds.length) {
+      query.set('districtIds', next.districtIds.join(','));
+    } else {
+      query.delete('districtIds');
+    }
+    if (next.roadIds.length) {
+      query.set('roadIds', next.roadIds.join(','));
+    } else {
+      query.delete('roadIds');
+    }
+    query.set('page', '1');
+    setParams(query);
   };
 
   const handleDelete = async () => {
@@ -95,13 +133,17 @@ export function TaskListPage() {
     },
     {
       key: 'segment',
-      title: '关联管段',
-      width: '170px',
+      title: '关联管段 / 层级',
+      width: '200px',
       render: (row) => (
         <>
           <span>{row.segment?.code ?? '—'}</span>
           <span className="cell-sub">
-            {row.segment ? `${row.segment.district} · ${row.segment.name}` : '管段已删除'}
+            {row.segment ? `${row.segment.name}` : '管段已删除'}
+          </span>
+          <span className="cell-sub">
+            {row.districtSnapshot}
+            {row.roadSnapshot ? ` · ${row.roadSnapshot}` : ''}
           </span>
         </>
       )
@@ -229,15 +271,7 @@ export function TaskListPage() {
                 ))}
               </select>
             </div>
-            <div className="filter-item">
-              <span className="filter-label">所属片区</span>
-              <input
-                className="input"
-                placeholder="精确匹配片区"
-                value={district}
-                onChange={(event) => applyFilter({ district: event.target.value })}
-              />
-            </div>
+            <HierarchyFilter districtIds={districtIds} roadIds={roadIds} onChange={applyHierarchy} />
             <div className="filter-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setParams(new URLSearchParams())}>
                 重置

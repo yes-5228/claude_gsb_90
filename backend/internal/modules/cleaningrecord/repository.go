@@ -34,6 +34,11 @@ func (r *Repository) Create(ctx context.Context, record *CleaningRecord) error {
 	return r.db.WithContext(ctx).Create(record).Error
 }
 
+// CreateTx 在给定事务内新增记录（与层级快照读取同事务）。
+func (r *Repository) CreateTx(ctx context.Context, tx *gorm.DB, record *CleaningRecord) error {
+	return tx.WithContext(ctx).Create(record).Error
+}
+
 // Save 保存记录全部字段。
 func (r *Repository) Save(ctx context.Context, record *CleaningRecord) error {
 	record.UpdatedAt = time.Now()
@@ -116,6 +121,12 @@ func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 	}
 	if query.Method != "" {
 		tx = tx.Where("method = ?", query.Method)
+	}
+	if len(query.DistrictIDs) > 0 {
+		tx = tx.Where("district_snapshot_id IN ?", query.DistrictIDs)
+	}
+	if len(query.RoadIDs) > 0 {
+		tx = tx.Where("road_snapshot_id IN ?", query.RoadIDs)
 	}
 	if query.Weather != "" {
 		tx = tx.Where("weather = ?", query.Weather)

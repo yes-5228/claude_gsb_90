@@ -16,6 +16,7 @@ import (
 	"github.com/drainage/desilting/internal/modules/acceptance"
 	"github.com/drainage/desilting/internal/modules/cleaningrecord"
 	"github.com/drainage/desilting/internal/modules/cleaningtask"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 )
 
@@ -71,10 +72,16 @@ func dialectorFor(cfg *config.Config) (gorm.Dialector, error) {
 // 表之间的引用关系由应用层在 service 中校验，因此这里不建外键约束，
 // 便于后续按模块拆库时平滑迁移。
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
+		&hierarchy.District{},
+		&hierarchy.Road{},
+		&hierarchy.ChangeLog{},
 		&pipesegment.PipeSegment{},
 		&cleaningtask.CleaningTask{},
 		&cleaningrecord.CleaningRecord{},
 		&acceptance.AcceptanceRecord{},
-	)
+	); err != nil {
+		return err
+	}
+	return BackfillHierarchy(db)
 }

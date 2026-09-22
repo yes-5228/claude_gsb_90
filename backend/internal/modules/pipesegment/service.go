@@ -14,20 +14,27 @@ import (
 	"github.com/drainage/desilting/internal/shared/refx"
 )
 
-// Service 管段台账业务逻辑。
-type Service struct {
-	repo *Repository
+// HierarchyGateway 层级模块对管段台账提供的能力（由 hierarchy.Service 实现）。
+type HierarchyGateway interface {
+	// EnsureNode 校验片区 / 道路组合是否合法（道路必须归属该片区）。
+	EnsureNode(ctx context.Context, districtID uint, roadID uint) error
 }
 
-// NewService 构造服务。
-func NewService(repo *Repository) *Service {
-	return &Service{repo: repo}
+// Service 管段台账业务逻辑。
+type Service struct {
+	repo      *Repository
+	hierarchy HierarchyGateway
+}
+
+// NewService 构造服务。hierarchy 用于校验管段所选层级是否合法。
+func NewService(repo *Repository, hierarchy HierarchyGateway) *Service {
+	return &Service{repo: repo, hierarchy: hierarchy}
 }
 
 // Create 新增管段。
 func (s *Service) Create(ctx context.Context, req SaveRequest) (*PipeSegment, error) {
 	segment := &PipeSegment{}
-	if err := applyRequest(req, segment, true); err != nil {
+	if err := s.applyRequest(ctx, req, segment, true); err != nil {
 		return nil, err
 	}
 
@@ -45,6 +52,9 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*PipeSegment, er
 		}
 		return nil, httpx.WrapInternal("新增管段失败", err)
 	}
+	if err := s.repo.AttachHierarchyNames(ctx, segment); err != nil {
+		return nil, httpx.WrapInternal("查询管段层级名称失败", err)
+	}
 	return segment, nil
 }
 
@@ -54,7 +64,7 @@ func (s *Service) Update(ctx context.Context, id uint, req SaveRequest) (*PipeSe
 	if err != nil {
 		return nil, notFound(err)
 	}
-	if err := applyRequest(req, segment, false); err != nil {
+	if err := s.applyRequest(ctx, req, segment, false); err != nil {
 		return nil, err
 	}
 
@@ -71,6 +81,9 @@ func (s *Service) Update(ctx context.Context, id uint, req SaveRequest) (*PipeSe
 			return nil, httpx.Conflict(fmt.Sprintf("管段编号 %s 已被其他管段使用", segment.Code))
 		}
 		return nil, httpx.WrapInternal("修改管段失败", err)
+	}
+	if err := s.repo.AttachHierarchyNames(ctx, segment); err != nil {
+		return nil, httpx.WrapInternal("查询管段层级名称失败", err)
 	}
 	return segment, nil
 }
@@ -134,6 +147,9 @@ func (s *Service) Detail(ctx context.Context, id uint) (*DetailResponse, error) 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.repo.AttachHierarchyNames(ctx, segment); err != nil {
+		return nil, httpx.WrapInternal("查询管段层级名称失败", err)
+	}
 	stats, err := s.repo.TaskStats(ctx, id)
 	if err != nil {
 		return nil, httpx.WrapInternal("统计管段任务失败", err)
@@ -163,17 +179,13 @@ func (s *Service) Options(ctx context.Context, keyword string) (*OptionsResponse
 	if err != nil {
 		return nil, httpx.WrapInternal("查询管段选项失败", err)
 	}
-	districts, err := s.repo.Districts(ctx)
-	if err != nil {
-		return nil, httpx.WrapInternal("查询片区失败", err)
-	}
-	return &OptionsResponse{Items: items, Districts: districts}, nil
+	return &OptionsResponse{Items: items}, nil
 }
 
-// applyRequest 把请求体写入目标对象并做枚举校验。
+// applyRequest 把请求体写入目标对象并做枚举与层级校验。
 //
 // isCreate 为 true 时要求状态必填（缺省取正常），为 false 时状态可选、不传则保持原值。
-func applyRequest(req SaveRequest, target *PipeSegment, isCreate bool) error {
+func (s *Service) applyRequest(ctx context.Context, req SaveRequest, target *PipeSegment, isCreate bool) error {
 	pipeType := strings.TrimSpace(req.PipeType)
 	if !option.Has(PipeTypeOptions(), pipeType) {
 		return httpx.Validation(fmt.Sprintf("管段类型只能是：%s", option.Labels(PipeTypeOptions())))
@@ -198,10 +210,21 @@ func applyRequest(req SaveRequest, target *PipeSegment, isCreate bool) error {
 		return httpx.Validation("管段编号不能为空")
 	}
 
+	if s.hierarchy != nil {
+		if err := s.hierarchy.EnsureNode(ctx, req.DistrictID, req.RoadID); err != nil {
+			return err
+		}
+	}
+
 	target.Code = code
 	target.Name = strings.TrimSpace(req.Name)
-	target.District = strings.TrimSpace(req.District)
-	target.RoadName = strings.TrimSpace(req.RoadName)
+	target.DistrictID = req.DistrictID
+	if req.RoadID > 0 {
+		roadID := req.RoadID
+		target.RoadID = &roadID
+	} else {
+		target.RoadID = nil
+	}
 	target.PipeType = pipeType
 	target.Material = material
 	target.DiameterMm = req.DiameterMm

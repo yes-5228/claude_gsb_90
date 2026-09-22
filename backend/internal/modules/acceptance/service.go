@@ -38,17 +38,32 @@ type RecordGateway interface {
 	TotalsByTask(ctx context.Context, taskID uint) (refx.RecordTotals, error)
 }
 
+// SnapshotGateway 层级快照能力（由 hierarchy.Service 实现）。
+type SnapshotGateway interface {
+	// SnapshotInTx 在给定事务内读取管段当前层级并加锁，固化登记当时的名称。
+	SnapshotInTx(ctx context.Context, tx *gorm.DB, segmentID uint) (Snapshot, error)
+}
+
+// Snapshot 登记当时的层级名称。
+type Snapshot struct {
+	DistrictID   uint
+	DistrictName string
+	RoadID       *uint
+	RoadName     string
+}
+
 // Service 验收业务逻辑。
 type Service struct {
-	repo     *Repository
-	tasks    TaskGateway
-	segments SegmentGateway
-	records  RecordGateway
+	repo      *Repository
+	tasks     TaskGateway
+	segments  SegmentGateway
+	records   RecordGateway
+	snapshots SnapshotGateway
 }
 
 // NewService 构造服务。
-func NewService(repo *Repository, tasks TaskGateway, segments SegmentGateway, records RecordGateway) *Service {
-	return &Service{repo: repo, tasks: tasks, segments: segments, records: records}
+func NewService(repo *Repository, tasks TaskGateway, segments SegmentGateway, records RecordGateway, snapshots SnapshotGateway) *Service {
+	return &Service{repo: repo, tasks: tasks, segments: segments, records: records, snapshots: snapshots}
 }
 
 // Create 登记验收记录。
@@ -118,6 +133,17 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*AcceptanceRecor
 	for attempt := 0; attempt < 5; attempt++ {
 		record.Code = s.nextCode(ctx, record.AcceptedAt)
 		err = s.repo.Transaction(ctx, func(tx *gorm.DB) error {
+			// 与层级调整互斥的快照读取：调整期间登记的验收记录只按一个确定口径归属。
+			if s.snapshots != nil {
+				snap, snapErr := s.snapshots.SnapshotInTx(ctx, tx, task.PipeSegmentID)
+				if snapErr != nil {
+					return snapErr
+				}
+				record.DistrictSnapshotID = snap.DistrictID
+				record.DistrictSnapshot = snap.DistrictName
+				record.RoadSnapshotID = snap.RoadID
+				record.RoadSnapshot = snap.RoadName
+			}
 			if err := s.repo.CreateInTx(ctx, tx, record); err != nil {
 				return err
 			}

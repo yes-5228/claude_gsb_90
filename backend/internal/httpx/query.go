@@ -1,6 +1,11 @@
 package httpx
 
-import "github.com/gofiber/fiber/v2"
+import (
+	"strconv"
+	"strings"
+
+	"github.com/gofiber/fiber/v2"
+)
 
 // 分页参数的边界限制。
 const (
@@ -46,4 +51,31 @@ func ParsePage(c *fiber.Ctx) PageQuery {
 // TrimmedQuery 读取并去除首尾空白的查询参数。
 func TrimmedQuery(c *fiber.Ctx, key string) string {
 	return trimSpace(c.Query(key))
+}
+
+// ParseIDList 解析重复出现或逗号分隔的 ID 查询参数。
+//
+// 同时支持 districtIds=1&districtIds=2 与 districtIds=1,2 两种写法，
+// 用于片区 / 道路的多选、全选筛选；非法值自动忽略并去重。
+func ParseIDList(c *fiber.Ctx, key string) []uint {
+	values := make([]uint, 0)
+	seen := make(map[uint]struct{})
+	for _, single := range c.Context().QueryArgs().PeekMulti(key) {
+		for _, part := range strings.Split(string(single), ",") {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+			id, err := strconv.Atoi(trimmed)
+			if err != nil || id <= 0 {
+				continue
+			}
+			if _, ok := seen[uint(id)]; ok {
+				continue
+			}
+			seen[uint(id)] = struct{}{}
+			values = append(values, uint(id))
+		}
+	}
+	return values
 }

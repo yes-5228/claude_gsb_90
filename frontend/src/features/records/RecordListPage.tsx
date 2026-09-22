@@ -1,10 +1,11 @@
-// 清淤记录列表：按任务、清淤方式、天气与清淤日期区间检索。
+// 清淤记录列表：按任务、片区 / 道路（多选）、清淤方式、天气与清淤日期区间检索。
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toErrorMessage } from '../../api/client';
 import { recordApi } from '../../api/records';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { DataTable, type Column } from '../../components/DataTable';
+import { HierarchyFilter } from '../../components/HierarchyFilter';
 import { PageHeader } from '../../components/PageHeader';
 import { Pagination } from '../../components/Pagination';
 import { SectionCard } from '../../components/SectionCard';
@@ -17,6 +18,16 @@ import { formatDate, formatLength, formatNumber, formatVolume } from '../../util
 
 const PAGE_SIZE = 10;
 
+function parseIds(raw: string | null): number[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
 export function RecordListPage() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -25,6 +36,8 @@ export function RecordListPage() {
 
   const keyword = params.get('keyword') ?? '';
   const taskId = Number(params.get('taskId') ?? '0') || 0;
+  const districtIds = parseIds(params.get('districtIds'));
+  const roadIds = parseIds(params.get('roadIds'));
   const method = params.get('method') ?? '';
   const weather = params.get('weather') ?? '';
   const dateFrom = params.get('dateFrom') ?? '';
@@ -41,6 +54,8 @@ export function RecordListPage() {
       recordApi.list({
         keyword,
         taskId: taskId || undefined,
+        districtIds: districtIds.length ? districtIds : undefined,
+        roadIds: roadIds.length ? roadIds : undefined,
         method,
         weather,
         dateFrom,
@@ -48,7 +63,7 @@ export function RecordListPage() {
         page,
         pageSize: PAGE_SIZE
       }),
-    [keyword, taskId, method, weather, dateFrom, dateTo, page]
+    [keyword, taskId, districtIds.join(','), roadIds.join(','), method, weather, dateFrom, dateTo, page]
   );
 
   const [pendingDelete, setPendingDelete] = useState<RecordListItem | null>(null);
@@ -71,6 +86,22 @@ export function RecordListPage() {
     const next = new URLSearchParams(params);
     next.set('page', String(nextPage));
     setParams(next);
+  };
+
+  const applyHierarchy = (next: { districtIds: number[]; roadIds: number[] }) => {
+    const query = new URLSearchParams(params);
+    if (next.districtIds.length) {
+      query.set('districtIds', next.districtIds.join(','));
+    } else {
+      query.delete('districtIds');
+    }
+    if (next.roadIds.length) {
+      query.set('roadIds', next.roadIds.join(','));
+    } else {
+      query.delete('roadIds');
+    }
+    query.set('page', '1');
+    setParams(query);
   };
 
   const clearTaskFilter = () => {
@@ -114,13 +145,17 @@ export function RecordListPage() {
     { key: 'cleanedAt', title: '清淤日期', width: '110px', render: (row) => formatDate(row.cleanedAt) },
     {
       key: 'task',
-      title: '所属任务 / 管段',
-      width: '220px',
+      title: '所属任务 / 管段 / 层级',
+      width: '250px',
       render: (row) => (
         <>
           <span>{row.task?.code ?? '—'}</span>
           <span className="cell-sub">
             {row.task ? `${row.task.segmentCode} · ${row.task.segmentName}` : '任务已删除'}
+          </span>
+          <span className="cell-sub">
+            {row.districtSnapshot}
+            {row.roadSnapshot ? ` · ${row.roadSnapshot}` : row.task?.segmentDistrict ? ` · ${row.task.segmentDistrict}` : ''}
           </span>
         </>
       )
@@ -233,6 +268,7 @@ export function RecordListPage() {
                 ))}
               </select>
             </div>
+            <HierarchyFilter districtIds={districtIds} roadIds={roadIds} onChange={applyHierarchy} />
             <div className="filter-item">
               <span className="filter-label">清淤日期起</span>
               <input
