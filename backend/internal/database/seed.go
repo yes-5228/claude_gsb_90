@@ -9,6 +9,7 @@ import (
 	"github.com/drainage/desilting/internal/modules/acceptance"
 	"github.com/drainage/desilting/internal/modules/cleaningrecord"
 	"github.com/drainage/desilting/internal/modules/cleaningtask"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 	"github.com/drainage/desilting/internal/shared/date"
 )
@@ -31,65 +32,108 @@ func Seed(db *gorm.DB, logger *slog.Logger) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		today := date.Today()
 
+		// 先建立片区 -> 道路层级，管段通过道路 ID 挂载，全系统共用同一套层级。
+		districtDefs := []string{"城东片区", "城西片区", "城南片区"}
+		districtIDs := make(map[string]uint, len(districtDefs))
+		for _, name := range districtDefs {
+			d := hierarchy.District{Name: name}
+			if err := tx.Create(&d).Error; err != nil {
+				return err
+			}
+			districtIDs[name] = d.ID
+		}
+		roadDefs := []struct {
+			district string
+			name     string
+		}{
+			{"城东片区", "中山北路"},
+			{"城东片区", "滨江大道"},
+			{"城西片区", "解放东路"},
+			{"城南片区", "人民广场环路"},
+			{"城南片区", "人民广场西路"},
+			{"城南片区", "长江南路"},
+			{"城南片区", "长江支路"},
+		}
+		roadIDs := make(map[string]uint, len(roadDefs))
+		for _, def := range roadDefs {
+			road := hierarchy.Road{Name: def.name, DistrictID: districtIDs[def.district]}
+			if err := tx.Create(&road).Error; err != nil {
+				return err
+			}
+			roadIDs[def.district+"/"+def.name] = road.ID
+		}
+		roadID := func(district, road string) uint {
+			return roadIDs[district+"/"+road]
+		}
+		roadNameByID := make(map[uint]string, len(roadDefs))
+		roadDistrictID := make(map[uint]uint, len(roadDefs))
+		roadDistrictName := make(map[uint]string, len(roadDefs))
+		for _, def := range roadDefs {
+			id := roadIDs[def.district+"/"+def.name]
+			roadNameByID[id] = def.name
+			roadDistrictID[id] = districtIDs[def.district]
+			roadDistrictName[id] = def.district
+		}
+
 		segments := []pipesegment.PipeSegment{
 			{
-				Code: "PS-Y-2021-001", Name: "中山北路雨水主干管", District: "城东片区", RoadName: "中山北路",
+				Code: "PS-Y-2021-001", Name: "中山北路雨水主干管", RoadID: roadID("城东片区", "中山北路"),
 				PipeType: pipesegment.TypeRainwater, Material: "concrete", DiameterMm: 800, LengthM: 156.5, DepthM: 3.2,
 				StartManhole: "Y1-08", EndManhole: "Y1-12", BuildYear: 2012, OwnerUnit: "市政排水管理处",
 				Status: pipesegment.StatusNormal, CleanedTimes: 1, LastCleanedAt: ptrDate(today.AddDays(-28)),
 				Remark: "承担中山北路北段雨水排放，汛期前需完成清淤",
 			},
 			{
-				Code: "PS-Y-2021-002", Name: "中山北路雨水支管", District: "城东片区", RoadName: "中山北路",
+				Code: "PS-Y-2021-002", Name: "中山北路雨水支管", RoadID: roadID("城东片区", "中山北路"),
 				PipeType: pipesegment.TypeRainwater, Material: "hdpe", DiameterMm: 400, LengthM: 88, DepthM: 2.1,
 				StartManhole: "Y1-12", EndManhole: "Y1-16", BuildYear: 2015, OwnerUnit: "市政排水管理处",
 				Status: pipesegment.StatusAttention, CleanedTimes: 1, LastCleanedAt: ptrDate(today.AddDays(-17)),
 				Remark: "管段存在错口，清淤后仍有少量积水",
 			},
 			{
-				Code: "PS-W-2018-014", Name: "解放东路污水干管", District: "城西片区", RoadName: "解放东路",
+				Code: "PS-W-2018-014", Name: "解放东路污水干管", RoadID: roadID("城西片区", "解放东路"),
 				PipeType: pipesegment.TypeSewage, Material: "concrete", DiameterMm: 1000, LengthM: 320, DepthM: 4.5,
 				StartManhole: "W2-03", EndManhole: "W2-11", BuildYear: 2009, OwnerUnit: "市政排水管理处",
 				Status: pipesegment.StatusNormal, CleanedTimes: 1, LastCleanedAt: ptrDate(today.AddDays(-21)),
 			},
 			{
-				Code: "PS-W-2018-015", Name: "解放东路污水支管", District: "城西片区", RoadName: "解放东路",
+				Code: "PS-W-2018-015", Name: "解放东路污水支管", RoadID: roadID("城西片区", "解放东路"),
 				PipeType: pipesegment.TypeSewage, Material: "ductile_iron", DiameterMm: 500, LengthM: 120, DepthM: 2.8,
 				StartManhole: "W2-11", EndManhole: "W2-15", BuildYear: 2014, OwnerUnit: "市政排水管理处",
 				Status: pipesegment.StatusBlocked, Remark: "W2-12 井段曾发现建筑垃圾，需重点复查",
 			},
 			{
-				Code: "PS-H-2020-007", Name: "人民广场合流管", District: "城南片区", RoadName: "人民广场环路",
+				Code: "PS-H-2020-007", Name: "人民广场合流管", RoadID: roadID("城南片区", "人民广场环路"),
 				PipeType: pipesegment.TypeCombined, Material: "concrete", DiameterMm: 1200, LengthM: 210, DepthM: 5,
 				StartManhole: "H3-01", EndManhole: "H3-06", BuildYear: 2011, OwnerUnit: "人民广场管理办公室",
 				Status: pipesegment.StatusAttention, Remark: "H3-04 井段存在树根侵入",
 			},
 			{
-				Code: "PS-Y-2022-033", Name: "长江南路雨水管", District: "城南片区", RoadName: "长江南路",
+				Code: "PS-Y-2022-033", Name: "长江南路雨水管", RoadID: roadID("城南片区", "长江南路"),
 				PipeType: pipesegment.TypeRainwater, Material: "hdpe", DiameterMm: 600, LengthM: 175, DepthM: 2.6,
 				StartManhole: "Y4-05", EndManhole: "Y4-11", BuildYear: 2018, OwnerUnit: "城南片区养护站",
 				Status: pipesegment.StatusNormal,
 			},
 			{
-				Code: "PS-W-2019-021", Name: "长江南路污水管", District: "城南片区", RoadName: "长江南路",
+				Code: "PS-W-2019-021", Name: "长江南路污水管", RoadID: roadID("城南片区", "长江南路"),
 				PipeType: pipesegment.TypeSewage, Material: "concrete", DiameterMm: 600, LengthM: 190, DepthM: 3.4,
 				StartManhole: "W4-02", EndManhole: "W4-08", BuildYear: 2010, OwnerUnit: "城南片区养护站",
 				Status: pipesegment.StatusNormal,
 			},
 			{
-				Code: "PS-Y-2023-046", Name: "滨江大道雨水管", District: "城东片区", RoadName: "滨江大道",
+				Code: "PS-Y-2023-046", Name: "滨江大道雨水管", RoadID: roadID("城东片区", "滨江大道"),
 				PipeType: pipesegment.TypeRainwater, Material: "grp", DiameterMm: 1000, LengthM: 265, DepthM: 3.8,
 				StartManhole: "Y6-01", EndManhole: "Y6-09", BuildYear: 2020, OwnerUnit: "滨江新区建设指挥部",
 				Status: pipesegment.StatusNormal,
 			},
 			{
-				Code: "PS-H-2020-009", Name: "人民广场合流支管", District: "城南片区", RoadName: "人民广场西路",
+				Code: "PS-H-2020-009", Name: "人民广场合流支管", RoadID: roadID("城南片区", "人民广场西路"),
 				PipeType: pipesegment.TypeCombined, Material: "concrete", DiameterMm: 600, LengthM: 96, DepthM: 3.1,
 				StartManhole: "H3-06", EndManhole: "H3-09", BuildYear: 2011, OwnerUnit: "人民广场管理办公室",
 				Status: pipesegment.StatusNormal, Remark: "尚未安排过清淤",
 			},
 			{
-				Code: "PS-Y-2022-035", Name: "长江南路雨水支管", District: "城南片区", RoadName: "长江支路",
+				Code: "PS-Y-2022-035", Name: "长江南路雨水支管", RoadID: roadID("城南片区", "长江支路"),
 				PipeType: pipesegment.TypeRainwater, Material: "pvc", DiameterMm: 300, LengthM: 64, DepthM: 1.8,
 				StartManhole: "Y4-11", EndManhole: "Y4-13", BuildYear: 2018, OwnerUnit: "城南片区养护站",
 				Status: pipesegment.StatusNormal, Remark: "尚未安排过清淤",
@@ -100,8 +144,10 @@ func Seed(db *gorm.DB, logger *slog.Logger) error {
 		}
 
 		segmentID := make(map[string]uint, len(segments))
+		segmentRoad := make(map[uint]uint, len(segments))
 		for i := range segments {
 			segmentID[segments[i].Code] = segments[i].ID
+			segmentRoad[segments[i].ID] = segments[i].RoadID
 		}
 
 		tasks := []cleaningtask.CleaningTask{
@@ -182,9 +228,25 @@ func Seed(db *gorm.DB, logger *slog.Logger) error {
 			return err
 		}
 
+		// 回填任务登记当时的层级快照（seed 内层级未调整，按当前归属固化）。
+		for i := range tasks {
+			rid := segmentRoad[tasks[i].PipeSegmentID]
+			if err := tx.Model(&cleaningtask.CleaningTask{}).Where("id = ?", tasks[i].ID).
+				Updates(map[string]any{
+					"district_id":   roadDistrictID[rid],
+					"road_id":       rid,
+					"district_name": roadDistrictName[rid],
+					"road_name":     roadNameByID[rid],
+				}).Error; err != nil {
+				return err
+			}
+		}
+
 		taskID := make(map[string]uint, len(tasks))
+		taskRoad := make(map[uint]uint, len(tasks))
 		for i := range tasks {
 			taskID[tasks[i].Code] = tasks[i].ID
+			taskRoad[tasks[i].ID] = segmentRoad[tasks[i].PipeSegmentID]
 		}
 
 		records := []cleaningrecord.CleaningRecord{
@@ -247,6 +309,20 @@ func Seed(db *gorm.DB, logger *slog.Logger) error {
 		}
 		if err := tx.Create(&records).Error; err != nil {
 			return err
+		}
+
+		// 回填记录录入当时的层级快照，与其任务保持同一登记口径。
+		for i := range records {
+			rid := taskRoad[records[i].TaskID]
+			if err := tx.Model(&cleaningrecord.CleaningRecord{}).Where("id = ?", records[i].ID).
+				Updates(map[string]any{
+					"district_id":   roadDistrictID[rid],
+					"road_id":       rid,
+					"district_name": roadDistrictName[rid],
+					"road_name":     roadNameByID[rid],
+				}).Error; err != nil {
+				return err
+			}
 		}
 
 		acceptances := []acceptance.AcceptanceRecord{

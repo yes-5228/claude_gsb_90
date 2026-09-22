@@ -1,30 +1,44 @@
-// 管段台账列表：按片区、类型、状态与关键字检索，支持新增 / 编辑 / 删除。
+// 管段台账列表：按片区 / 道路层级多选、类型、状态与关键字检索，支持新增 / 编辑 / 删除。
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toErrorMessage } from '../../api/client';
 import { segmentApi } from '../../api/pipesegments';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { DataTable, type Column } from '../../components/DataTable';
+import { HierarchyMultiSelect } from '../../components/HierarchyMultiSelect';
 import { PageHeader } from '../../components/PageHeader';
 import { Pagination } from '../../components/Pagination';
 import { SectionCard } from '../../components/SectionCard';
 import { StatusTag } from '../../components/StatusTag';
 import { useToast } from '../../components/Toast';
 import { useAsync } from '../../hooks/useAsync';
+import { useHierarchy } from '../../providers/HierarchyProvider';
 import { useMeta } from '../../providers/MetaProvider';
 import type { PipeSegment } from '../../types/domain';
 import { formatDate, formatLength, formatNumber } from '../../utils/format';
 
 const PAGE_SIZE = 10;
 
+function parseIds(raw: string | null): number[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
 export function SegmentListPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const { enums } = useMeta();
+  const { districts, roadPath } = useHierarchy();
   const [params, setParams] = useSearchParams();
 
   const keyword = params.get('keyword') ?? '';
-  const district = params.get('district') ?? '';
+  const districtIds = parseIds(params.get('districtIds'));
+  const roadIds = parseIds(params.get('roadIds'));
   const pipeType = params.get('pipeType') ?? '';
   const status = params.get('status') ?? '';
   const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
@@ -35,10 +49,18 @@ export function SegmentListPage() {
   }, [keyword]);
 
   const list = useAsync(
-    () => segmentApi.list({ keyword, district, pipeType, status, page, pageSize: PAGE_SIZE }),
-    [keyword, district, pipeType, status, page]
+    () =>
+      segmentApi.list({
+        keyword,
+        districtIds: districtIds.length ? districtIds : undefined,
+        roadIds: roadIds.length ? roadIds : undefined,
+        pipeType,
+        status,
+        page,
+        pageSize: PAGE_SIZE
+      }),
+    [keyword, params.get('districtIds'), params.get('roadIds'), pipeType, status, page]
   );
-  const options = useAsync(() => segmentApi.options(), []);
 
   const [pendingDelete, setPendingDelete] = useState<PipeSegment | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -72,7 +94,6 @@ export function SegmentListPage() {
       toast.success(`管段 ${pendingDelete.code} 已删除`);
       setPendingDelete(null);
       list.reload();
-      options.reload();
     } catch (cause: unknown) {
       toast.error(toErrorMessage(cause));
     } finally {
@@ -97,12 +118,15 @@ export function SegmentListPage() {
     {
       key: 'district',
       title: '片区 / 道路',
-      render: (row) => (
-        <>
-          <span>{row.district}</span>
-          <span className="cell-sub">{row.roadName || '—'}</span>
-        </>
-      )
+      render: (row) => {
+        const path = roadPath(row.roadId);
+        return (
+          <>
+            <span>{path.district}</span>
+            <span className="cell-sub">{path.road}</span>
+          </>
+        );
+      }
     },
     {
       key: 'pipeType',
@@ -169,11 +193,16 @@ export function SegmentListPage() {
     <div className="page">
       <PageHeader
         title="管段台账"
-        description="维护排水管网管段基础档案，记录清淤次数与最近清淤时间，作为任务与记录的关联主体。"
+        description="管段挂在片区-道路层级上，层级在「片区 / 道路」中统一维护；台账、任务、记录与看板共用同一套层级与名称。"
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => navigate('/segments/new')}>
-            新增管段
-          </button>
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => navigate('/hierarchy')}>
+              层级管理
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => navigate('/segments/new')}>
+              新增管段
+            </button>
+          </>
         }
       />
 
@@ -194,20 +223,19 @@ export function SegmentListPage() {
                 }}
               />
             </div>
-            <div className="filter-item">
-              <span className="filter-label">所属片区</span>
-              <select
-                className="select"
-                value={district}
-                onChange={(event) => applyFilter({ district: event.target.value })}
-              >
-                <option value="">全部片区</option>
-                {(options.data?.districts ?? []).map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
+            <div className="filter-item" style={{ minWidth: 220 }}>
+              <span className="filter-label">片区 / 道路</span>
+              <HierarchyMultiSelect
+                districts={districts}
+                selectedDistrictIds={districtIds}
+                selectedRoadIds={roadIds}
+                onChange={({ districtIds: d, roadIds: r }) =>
+                  applyFilter({
+                    districtIds: d.length ? d.join(',') : '',
+                    roadIds: r.length ? r.join(',') : ''
+                  })
+                }
+              />
             </div>
             <div className="filter-item">
               <span className="filter-label">管段类型</span>

@@ -42,12 +42,12 @@ const pendingColumns: Column<PendingAcceptanceItem>[] = [
   { key: 'code', title: '任务编号', width: '140px', render: (row) => <span className="cell-main">{row.code}</span> },
   {
     key: 'title',
-    title: '任务与管段',
+    title: '任务与层级',
     render: (row) => (
       <>
         <span>{row.title}</span>
         <span className="cell-sub">
-          {row.segmentCode} · {row.segmentName}
+          {row.segmentCode} · {row.segmentName} · {row.segmentDistrict}/{row.segmentRoad ? row.segmentRoad : '—'}
         </span>
       </>
     )
@@ -79,12 +79,12 @@ const recentColumns: Column<RecentRecordItem>[] = [
   { key: 'cleanedAt', title: '清淤日期', width: '110px', render: (row) => formatDate(row.cleanedAt) },
   {
     key: 'task',
-    title: '所属任务与管段',
+    title: '所属任务与层级',
     render: (row) => (
       <>
         <span>{row.taskTitle}</span>
         <span className="cell-sub">
-          {row.segmentCode} · {row.segmentName}
+          {row.segmentCode} · {row.segmentName} · {row.segmentDistrict}/{row.segmentRoad ? row.segmentRoad : '—'}
         </span>
       </>
     )
@@ -239,7 +239,7 @@ export function DashboardPage() {
             <DataTable
               columns={districtColumns}
               rows={districts.data ?? []}
-              rowKey={(row) => row.district}
+              rowKey={(row) => row.districtId}
               loading={districts.loading}
               error={districts.error}
               onRetry={districts.reload}

@@ -88,7 +88,7 @@ func (r *Repository) List(ctx context.Context, query ListQuery) ([]PipeSegment, 
 
 	segments := make([]PipeSegment, 0)
 	err := r.filtered(ctx, query).
-		Order("district ASC, code ASC").
+		Order("road_id ASC, code ASC").
 		Offset(query.Page.Offset()).
 		Limit(query.Page.PageSize).
 		Find(&segments).Error
@@ -102,13 +102,21 @@ func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 	tx := r.db.WithContext(ctx).Model(&PipeSegment{})
 	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
 		like := "%" + keyword + "%"
-		tx = tx.Where(
-			"LOWER(code) LIKE ? OR LOWER(name) LIKE ? OR LOWER(road_name) LIKE ? OR LOWER(start_manhole) LIKE ? OR LOWER(end_manhole) LIKE ?",
-			like, like, like, like, like,
-		)
+		// 道路名来自层级表，关键字检索时一并匹配。
+		tx = tx.Joins("LEFT JOIN roads AS kw_roads ON kw_roads.id = pipe_segments.road_id").
+			Where(
+				"LOWER(pipe_segments.code) LIKE ? OR LOWER(pipe_segments.name) LIKE ? OR LOWER(kw_roads.name) LIKE ? OR LOWER(pipe_segments.start_manhole) LIKE ? OR LOWER(pipe_segments.end_manhole) LIKE ?",
+				like, like, like, like, like,
+			)
 	}
-	if query.District != "" {
-		tx = tx.Where("district = ?", query.District)
+	if len(query.DistrictIDs) > 0 {
+		roadSub := r.db.WithContext(ctx).Table("roads").
+			Select("id").
+			Where("district_id IN ?", query.DistrictIDs)
+		tx = tx.Where("road_id IN (?)", roadSub)
+	}
+	if len(query.RoadIDs) > 0 {
+		tx = tx.Where("road_id IN ?", query.RoadIDs)
 	}
 	if query.PipeType != "" {
 		tx = tx.Where("pipe_type = ?", query.PipeType)
@@ -119,32 +127,42 @@ func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 	return tx
 }
 
-// Search 按关键字搜索管段，用于下拉选择。
+// Search 按关键字搜索管段，用于下拉选择，顺带解析当前层级名称。
 func (r *Repository) Search(ctx context.Context, keyword string, limit int) ([]Brief, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	tx := r.db.WithContext(ctx).Model(&PipeSegment{}).
-		Select("id, code, name, district, road_name")
+	tx := r.db.WithContext(ctx).Table("pipe_segments AS p").
+		Select(`p.id, p.code, p.name, p.road_id,
+			r.district_id AS district_id,
+			COALESCE(d.name, '') AS district_name,
+			COALESCE(r.name, '') AS road_name`).
+		Joins("LEFT JOIN roads AS r ON r.id = p.road_id").
+		Joins("LEFT JOIN districts AS d ON d.id = r.district_id")
 	if trimmed := strings.ToLower(strings.TrimSpace(keyword)); trimmed != "" {
 		like := "%" + trimmed + "%"
-		tx = tx.Where("LOWER(code) LIKE ? OR LOWER(name) LIKE ?", like, like)
+		tx = tx.Where("LOWER(p.code) LIKE ? OR LOWER(p.name) LIKE ? OR LOWER(r.name) LIKE ?", like, like, like)
 	}
 	items := make([]Brief, 0, limit)
-	err := tx.Order("code ASC").Limit(limit).Scan(&items).Error
+	err := tx.Order("p.code ASC").Limit(limit).Scan(&items).Error
 	return items, err
 }
 
-// BriefsByIDs 批量查询管段精简信息，避免列表接口出现 N+1 查询。
+// BriefsByIDs 批量查询管段精简信息（含当前层级），避免列表接口出现 N+1 查询。
 func (r *Repository) BriefsByIDs(ctx context.Context, ids []uint) (map[uint]Brief, error) {
 	result := make(map[uint]Brief, len(ids))
 	if len(ids) == 0 {
 		return result, nil
 	}
 	items := make([]Brief, 0, len(ids))
-	err := r.db.WithContext(ctx).Model(&PipeSegment{}).
-		Select("id, code, name, district, road_name").
-		Where("id IN ?", ids).
+	err := r.db.WithContext(ctx).Table("pipe_segments AS p").
+		Select(`p.id, p.code, p.name, p.road_id,
+			r.district_id AS district_id,
+			COALESCE(d.name, '') AS district_name,
+			COALESCE(r.name, '') AS road_name`).
+		Joins("LEFT JOIN roads AS r ON r.id = p.road_id").
+		Joins("LEFT JOIN districts AS d ON d.id = r.district_id").
+		Where("p.id IN ?", ids).
 		Scan(&items).Error
 	if err != nil {
 		return nil, err
@@ -153,16 +171,6 @@ func (r *Repository) BriefsByIDs(ctx context.Context, ids []uint) (map[uint]Brie
 		result[item.ID] = item
 	}
 	return result, nil
-}
-
-// Districts 返回全部已使用的片区名称。
-func (r *Repository) Districts(ctx context.Context) ([]string, error) {
-	districts := make([]string, 0)
-	err := r.db.WithContext(ctx).Model(&PipeSegment{}).
-		Distinct().
-		Order("district ASC").
-		Pluck("district", &districts).Error
-	return districts, err
 }
 
 // MarkCleaned 更新管段的清淤统计：次数 +1，最近清淤日期取更晚的一次。

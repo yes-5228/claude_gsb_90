@@ -132,22 +132,27 @@ npm run dev            # http://localhost:5173
 | --- | --- | --- |
 | GET | `/healthz` | 健康检查（环境、数据库、运行时长） |
 | GET | `/api/v1/meta/enums` | 全部枚举字典 |
+| GET | `/api/v1/hierarchy/tree` | 片区-道路层级树（含各道路管段数量） |
+| GET | `/api/v1/hierarchy/change-logs` | 层级变更记录（新增/改名/归属调整/删除） |
+| POST/PUT/DELETE | `/api/v1/hierarchy/districts[/:id...]` | 片区新增 / 改名 / 删除 |
+| POST/PUT/DELETE | `/api/v1/hierarchy/roads[/:id...]` | 道路新增 / 改名 / 归属调整 / 删除 |
+| POST | `/api/v1/hierarchy/roads/batch-move` | 批量调整道路归属（整组事务，不部分成功） |
 | GET | `/api/v1/dashboard/overview` | 看板总览指标 |
 | GET | `/api/v1/dashboard/district-stats` | 分片区统计 |
 | GET | `/api/v1/dashboard/pending-acceptance?limit=8` | 待验收任务 |
 | GET | `/api/v1/dashboard/recent-records?limit=8` | 最近清淤记录 |
-| GET | `/api/v1/pipe-segments` | 管段列表（`keyword` `district` `pipeType` `status` `page` `pageSize`） |
-| GET | `/api/v1/pipe-segments/options` | 管段下拉选项 + 已有片区 |
+| GET | `/api/v1/pipe-segments` | 管段列表（`keyword` `districtIds`（可多选）`roadIds`（可多选）`pipeType` `status` `page` `pageSize`） |
+| GET | `/api/v1/pipe-segments/options` | 管段下拉选项（带当前层级名称） |
 | GET | `/api/v1/pipe-segments/:id` | 管段详情（含任务统计与最近任务） |
 | GET | `/api/v1/pipe-segments/:id/cleaning-history` | 管段清淤履历 |
 | POST/PUT/DELETE | `/api/v1/pipe-segments[/:id]` | 新增 / 修改 / 删除管段 |
-| GET | `/api/v1/cleaning-tasks` | 任务列表（`keyword` `status` `district` `priority` `source` `pipeSegmentId` `planFrom` `planTo`） |
+| GET | `/api/v1/cleaning-tasks` | 任务列表（`keyword` `status` `districtIds`（可多选）`roadIds`（可多选）`priority` `source` `pipeSegmentId` `planFrom` `planTo`） |
 | GET | `/api/v1/cleaning-tasks/:id` | 任务详情（含清淤汇总、验收结论、可执行动作） |
 | POST/PUT/DELETE | `/api/v1/cleaning-tasks[/:id]` | 登记 / 修改 / 删除任务 |
 | POST | `/api/v1/cleaning-tasks/:id/start` | 开工（待开工 → 清淤中） |
 | POST | `/api/v1/cleaning-tasks/:id/complete` | 完工报验（清淤中 → 待验收，需至少 1 条清淤记录） |
 | POST | `/api/v1/cleaning-tasks/:id/cancel` | 取消任务（需填写取消原因） |
-| GET | `/api/v1/cleaning-records` | 记录列表（`keyword` `taskId` `segmentId` `method` `weather` `dateFrom` `dateTo`） |
+| GET | `/api/v1/cleaning-records` | 记录列表（`keyword` `taskId` `segmentId` `districtIds`（可多选）`roadIds`（可多选）`method` `weather` `dateFrom` `dateTo`） |
 | GET | `/api/v1/cleaning-records/:id` | 记录详情（含所属任务与管段） |
 | POST/PUT/DELETE | `/api/v1/cleaning-records[/:id]` | 录入 / 修改 / 删除清淤记录 |
 | GET | `/api/v1/acceptances` | 验收列表（`keyword` `taskId` `segmentId` `result` `inspectorName` `dateFrom` `dateTo` `pendingRectify`） |
@@ -157,6 +162,19 @@ npm run dev            # http://localhost:5173
 | DELETE | `/api/v1/acceptances/:id` | 删除验收记录（合格结论不允许删除） |
 
 ## 数据模型与状态流转
+
+片区-道路是一套两级层级（`districts` / `roads`），管段台账通过 `pipe_segments.road_id`
+挂到道路上，管段、任务、记录、看板共用同一套层级与名称。
+
+- 层级的新增、改名、归属调整、删除都会写入 `hierarchy_change_logs`；批量归属调整共享
+  同一批次号，且整组在一个事务内完成——任一道路或目标片区不合法则整批回滚，绝不部分成功。
+- 删除保护：被管段引用的道路、其下仍有道路的片区不允许删除。
+- 任务与清淤记录在登记 / 录入当时固化层级快照（`district_id/road_id` + 名称）。片区调整、
+  道路改名或归属调整都不会回写历史数据，**历史任务与记录始终按登记当时的层级展示**；
+  管段台账与看板始终展示当前层级。
+- 归属调整与业务录入并发时，双方在道路行上以行级锁串行（SQLite 单连接天然串行），
+  事务先提交者确定归属口径，录入中的记录必然归属到调整前或调整后其中一个确定层级。
+- 旧版本字符串形式的片区/道路会在启动迁移时幂等回填为层级表与历史快照。
 
 业务依赖方向单向：**清淤记录 → 清淤任务 → 管段台账**；验收记录同时依赖任务、管段与清淤记录。
 跨模块的反向引用检查与跨表统计统一收敛在 `internal/shared/refx`，避免模块间循环依赖。

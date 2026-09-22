@@ -6,8 +6,8 @@ import (
 )
 
 // Register 注册管段台账路由，并返回 service 供其他模块装配依赖。
-func Register(router fiber.Router, db *gorm.DB) *Service {
-	svc := NewService(NewRepository(db))
+func Register(router fiber.Router, db *gorm.DB, h HierarchyGateway) *Service {
+	svc := NewService(NewRepository(db), h)
 	handler := NewHandler(svc)
 
 	group := router.Group("/pipe-segments")

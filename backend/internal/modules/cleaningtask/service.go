@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/drainage/desilting/internal/httpx"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 	"github.com/drainage/desilting/internal/shared/date"
 	"github.com/drainage/desilting/internal/shared/option"
@@ -24,18 +25,28 @@ type SegmentGateway interface {
 	BriefsByIDs(ctx context.Context, ids []uint) (map[uint]pipesegment.Brief, error)
 }
 
+// HierarchyGateway 层级模块对外提供的能力（由 hierarchy.Service 实现）。
+type HierarchyGateway interface {
+	RoadInfo(ctx context.Context, tx *gorm.DB, roadID uint) (hierarchy.Info, error)
+}
+
 // Service 清淤任务业务逻辑。
 type Service struct {
-	repo     *Repository
-	segments SegmentGateway
+	repo      *Repository
+	segments  SegmentGateway
+	hierarchy HierarchyGateway
 }
 
 // NewService 构造服务。
-func NewService(repo *Repository, segments SegmentGateway) *Service {
-	return &Service{repo: repo, segments: segments}
+func NewService(repo *Repository, segments SegmentGateway, h HierarchyGateway) *Service {
+	return &Service{repo: repo, segments: segments, hierarchy: h}
 }
 
 // Create 登记清淤任务，任务编号按 日期 + 流水号 自动生成。
+//
+// 任务在登记当时固化片区 / 道路层级快照（ID + 名称）。管段道路的锁定读取、
+// 层级解析与任务写入在同一事务内完成：与层级归属调整并发时，先提交的事务确定
+// 归属口径，登记中的任务必然归属到调整前或调整后其中一个确定的层级。
 func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningTask, error) {
 	task := &CleaningTask{}
 	if err := s.build(ctx, req, task); err != nil {
@@ -44,15 +55,39 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningTask, e
 
 	for attempt := 0; attempt < 5; attempt++ {
 		task.Code = s.nextCode(ctx, task.PlanStartDate)
-		err := s.repo.Create(ctx, task)
+		err := s.repo.Transaction(ctx, func(tx *gorm.DB) error {
+			roadID, err := s.repo.SegmentRoadForUpdate(ctx, tx, task.PipeSegmentID)
+			if err != nil {
+				return httpx.WrapInternal("读取管段归属失败", err)
+			}
+			info, err := s.hierarchy.RoadInfo(ctx, tx, roadID)
+			if err != nil {
+				return err
+			}
+			applySnapshot(task, info)
+			return s.repo.CreateInTx(ctx, tx, task)
+		})
 		if err == nil {
 			return task, nil
 		}
-		if !errors.Is(err, gorm.ErrDuplicatedKey) {
-			return nil, httpx.WrapInternal("新增清淤任务失败", err)
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			continue
 		}
+		var appErr *httpx.AppError
+		if errors.As(err, &appErr) {
+			return nil, err
+		}
+		return nil, httpx.WrapInternal("新增清淤任务失败", err)
 	}
 	return nil, httpx.Conflict("任务编号生成冲突，请稍后重试")
+}
+
+// applySnapshot 把当前层级固化到任务快照字段。
+func applySnapshot(task *CleaningTask, info hierarchy.Info) {
+	task.DistrictID = info.DistrictID
+	task.RoadID = info.RoadID
+	task.DistrictName = info.DistrictName
+	task.RoadName = info.RoadName
 }
 
 // Update 修改任务。已完工进入验收流程后不再允许改动计划信息。
@@ -71,17 +106,35 @@ func (s *Service) Update(ctx context.Context, id uint, req SaveRequest) (*Cleani
 	if err != nil {
 		return nil, httpx.WrapInternal("检查清淤记录失败", err)
 	}
-	if hasRecords && req.PipeSegmentID != task.PipeSegmentID {
+	originalSegmentID := task.PipeSegmentID
+	if hasRecords && req.PipeSegmentID != originalSegmentID {
 		return nil, httpx.InvalidState("任务已录入清淤记录，不能再更换关联管段")
 	}
 
 	if err := s.build(ctx, req, task); err != nil {
 		return nil, err
 	}
+	// 更换了关联管段时，层级快照按新管段当前归属重新固化（无记录才允许换管段）；
+	// 未换管段则保留登记当时快照，层级后续调整不影响历史任务展示。
+	if req.PipeSegmentID != originalSegmentID {
+		info, err := s.resolveRoad(ctx, req.PipeSegmentID)
+		if err != nil {
+			return nil, err
+		}
+		applySnapshot(task, info)
+	}
 	if err := s.repo.Save(ctx, task); err != nil {
 		return nil, httpx.WrapInternal("修改清淤任务失败", err)
 	}
 	return task, nil
+}
+
+func (s *Service) resolveRoad(ctx context.Context, segmentID uint) (hierarchy.Info, error) {
+	segment, err := s.segments.FindByID(ctx, segmentID)
+	if err != nil {
+		return hierarchy.Info{}, err
+	}
+	return s.hierarchy.RoadInfo(ctx, nil, segment.RoadID)
 }
 
 // Delete 删除任务。已产生清淤记录或验收记录的任务不允许删除，保证台账可追溯。
@@ -259,6 +312,33 @@ func (s *Service) EnsureStarted(ctx context.Context, id uint) (*CleaningTask, er
 		return s.FindByID(ctx, id)
 	case StatusInProgress:
 		return task, nil
+	default:
+		return nil, httpx.InvalidState(fmt.Sprintf(
+			"任务当前状态为「%s」，不能录入清淤记录", StatusLabel(task.Status),
+		))
+	}
+}
+
+// StartInTx 在清淤记录录入事务内把任务幂等推进到清淤中并返回最新任务，
+// 使任务状态推进、层级快照读取与记录写入处于同一事务、同一口径。
+func (s *Service) StartInTx(ctx context.Context, tx *gorm.DB, id uint) (*CleaningTask, error) {
+	var task CleaningTask
+	if err := tx.WithContext(ctx).First(&task, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, httpx.NotFound("清淤任务不存在")
+		}
+		return nil, httpx.WrapInternal("查询清淤任务失败", err)
+	}
+	switch task.Status {
+	case StatusPending:
+		if err := s.repo.TransitionTx(ctx, tx, id, StatusPending, StatusInProgress,
+			map[string]any{"started_at": time.Now()}); err != nil {
+			return nil, transitionFailure(err)
+		}
+		task.Status = StatusInProgress
+		return &task, nil
+	case StatusInProgress:
+		return &task, nil
 	default:
 		return nil, httpx.InvalidState(fmt.Sprintf(
 			"任务当前状态为「%s」，不能录入清淤记录", StatusLabel(task.Status),

@@ -22,12 +22,14 @@ const (
 )
 
 // PipeSegment 管段台账。
+//
+// 管段通过 RoadID 挂到片区-道路层级上；片区 / 道路名称不属于管段自身字段，
+// 统一由层级模块解析，保证台账、任务、记录与看板共用同一套层级与名称。
 type PipeSegment struct {
 	ID            uint       `gorm:"primaryKey" json:"id"`
 	Code          string     `gorm:"size:64;uniqueIndex;not null" json:"code"`
 	Name          string     `gorm:"size:128;not null" json:"name"`
-	District      string     `gorm:"size:64;index;not null" json:"district"`
-	RoadName      string     `gorm:"size:128" json:"roadName"`
+	RoadID        uint       `gorm:"index;not null" json:"roadId"`
 	PipeType      string     `gorm:"size:16;index;not null" json:"pipeType"`
 	Material      string     `gorm:"size:32" json:"material"`
 	DiameterMm    int        `gorm:"not null" json:"diameterMm"`
@@ -50,11 +52,14 @@ func (PipeSegment) TableName() string {
 	return "pipe_segments"
 }
 
-// Brief 管段精简信息，供其他模块拼接展示。
+// Brief 管段精简信息，供其他模块拼接展示。片区 / 道路名称由层级表实时解析，
+// 始终与当前层级保持一致。
 type Brief struct {
-	ID       uint   `json:"id"`
-	Code     string `json:"code"`
-	Name     string `json:"name"`
-	District string `json:"district"`
-	RoadName string `json:"roadName"`
+	ID           uint   `json:"id"`
+	Code         string `json:"code"`
+	Name         string `json:"name"`
+	RoadID       uint   `json:"roadId"`
+	DistrictID   uint   `json:"districtId"`
+	DistrictName string `json:"district"`
+	RoadName     string `json:"roadName"`
 }

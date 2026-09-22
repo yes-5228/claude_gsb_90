@@ -7,9 +7,13 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/drainage/desilting/internal/shared/refx"
 )
+
+// forUpdate 行级锁子句。
+var forUpdate = clause.Locking{Strength: "UPDATE"}
 
 // ErrNotFound 任务不存在。
 var ErrNotFound = errors.New("清淤任务不存在")
@@ -35,6 +39,27 @@ func (r *Repository) DB() *gorm.DB {
 // Create 新增任务。
 func (r *Repository) Create(ctx context.Context, task *CleaningTask) error {
 	return r.db.WithContext(ctx).Create(task).Error
+}
+
+// CreateInTx 在给定事务中新增任务。
+func (r *Repository) CreateInTx(ctx context.Context, tx *gorm.DB, task *CleaningTask) error {
+	return tx.WithContext(ctx).Create(task).Error
+}
+
+// Transaction 执行事务，供任务登记与层级快照读取保持原子。
+func (r *Repository) Transaction(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	return r.db.WithContext(ctx).Transaction(fn)
+}
+
+// SegmentForUpdate 在事务内锁定读取管段当前归属的道路 ID（仅 PostgreSQL 加行锁）。
+func (r *Repository) SegmentRoadForUpdate(ctx context.Context, tx *gorm.DB, segmentID uint) (uint, error) {
+	var roadID uint
+	q := tx.WithContext(ctx).Table(refx.TablePipeSegments)
+	if r.db.Dialector != nil && r.db.Dialector.Name() == "postgres" {
+		q = q.Clauses(forUpdate)
+	}
+	err := q.Where("id = ?", segmentID).Limit(1).Pluck("road_id", &roadID).Error
+	return roadID, err
 }
 
 // Save 保存任务全部字段。
@@ -151,11 +176,11 @@ func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 	if query.PipeSegmentID > 0 {
 		tx = tx.Where("pipe_segment_id = ?", query.PipeSegmentID)
 	}
-	if query.District != "" {
-		subQuery := r.db.WithContext(ctx).Table(refx.TablePipeSegments).
-			Select("id").
-			Where("district = ?", query.District)
-		tx = tx.Where("pipe_segment_id IN (?)", subQuery)
+	if len(query.DistrictIDs) > 0 {
+		tx = tx.Where("district_id IN ?", query.DistrictIDs)
+	}
+	if len(query.RoadIDs) > 0 {
+		tx = tx.Where("road_id IN ?", query.RoadIDs)
 	}
 	if query.PlanFrom != nil {
 		tx = tx.Where("plan_start_date >= ?", query.PlanFrom.Time)

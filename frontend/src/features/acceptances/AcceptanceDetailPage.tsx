@@ -140,7 +140,8 @@ export function AcceptanceDetailPage() {
                     { label: '优先级', value: <StatusTag list="taskPriorities" value={task.priority} /> },
                     { label: '实施班组', value: task.teamName || '—' },
                     { label: '关联管段', value: `${task.segmentCode} · ${task.segmentName}` },
-                    { label: '所属片区', value: task.segmentDistrict || '—' }
+                    { label: '所属片区（任务登记当时）', value: task.segmentDistrict || '—' },
+                    { label: '所在道路（任务登记当时）', value: task.segmentRoad || '—' }
                   ]}
                 />
               ) : (

@@ -24,14 +24,49 @@ export interface PageResult<T> {
   pageSize: number;
 }
 
+// ---------- 片区-道路层级 ----------
+
+export type HierarchyNodeType = 'district' | 'road';
+export type HierarchyAction = 'create' | 'rename' | 'move' | 'delete';
+
+export interface RoadNode {
+  id: number;
+  name: string;
+  districtId: number;
+  sortOrder: number;
+  segmentCount: number;
+}
+
+export interface DistrictNode {
+  id: number;
+  name: string;
+  sortOrder: number;
+  roadCount: number;
+  segmentCount: number;
+  roads: RoadNode[];
+}
+
+export interface HierarchyChangeLog {
+  id: number;
+  batchId: string;
+  nodeType: HierarchyNodeType;
+  nodeId: number;
+  nodeName: string;
+  action: HierarchyAction;
+  fromValue: string;
+  toValue: string;
+  operator: string;
+  remark: string;
+  createdAt: string;
+}
+
 // ---------- 管段台账 ----------
 
 export interface PipeSegment {
   id: number;
   code: string;
   name: string;
-  district: string;
-  roadName: string;
+  roadId: number;
   pipeType: PipeType;
   material: string;
   diameterMm: number;
@@ -49,10 +84,19 @@ export interface PipeSegment {
   updatedAt: string;
 }
 
+export interface SegmentHierarchy {
+  roadId: number;
+  roadName: string;
+  districtId: number;
+  districtName: string;
+}
+
 export interface SegmentBrief {
   id: number;
   code: string;
   name: string;
+  roadId: number;
+  districtId: number;
   district: string;
   roadName: string;
 }
@@ -81,6 +125,7 @@ export interface TaskRef {
 
 export interface SegmentDetail {
   segment: PipeSegment;
+  hierarchy: SegmentHierarchy | null;
   taskStats: TaskStats;
   recentTasks: TaskRef[];
 }
@@ -103,14 +148,12 @@ export interface SegmentHistoryItem {
 
 export interface SegmentOptions {
   items: SegmentBrief[];
-  districts: string[];
 }
 
 export interface SegmentPayload {
   code: string;
   name: string;
-  district: string;
-  roadName: string;
+  roadId: number;
   pipeType: PipeType;
   material: string;
   diameterMm: number;
@@ -131,6 +174,10 @@ export interface CleaningTask {
   code: string;
   title: string;
   pipeSegmentId: number;
+  districtId: number;
+  roadId: number;
+  districtName: string;
+  roadName: string;
   priority: TaskPriority;
   source: TaskSource;
   method: CleaningMethod | '';
@@ -208,13 +255,20 @@ export interface TaskBrief {
   teamName: string;
   segmentCode: string;
   segmentName: string;
+  districtId: number;
+  roadId: number;
   segmentDistrict: string;
+  segmentRoad: string;
 }
 
 export interface CleaningRecord {
   id: number;
   code: string;
   taskId: number;
+  districtId: number;
+  roadId: number;
+  districtName: string;
+  roadName: string;
   cleanedAt: string | null;
   lengthM: number;
   sludgeVolumeM3: number;
@@ -334,6 +388,7 @@ export interface Overview {
 }
 
 export interface DistrictStat {
+  districtId: number;
   district: string;
   segmentCount: number;
   segmentLengthM: number;
@@ -351,6 +406,7 @@ export interface PendingAcceptanceItem {
   segmentCode: string;
   segmentName: string;
   segmentDistrict: string;
+  segmentRoad: string;
   teamName: string;
   planEndDate: string | null;
   finishedAt: string | null;
@@ -368,6 +424,8 @@ export interface RecentRecordItem {
   taskTitle: string;
   segmentCode: string;
   segmentName: string;
+  segmentDistrict: string;
+  segmentRoad: string;
   teamName: string;
   recorderName: string;
   lengthM: number;

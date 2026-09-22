@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -18,9 +19,13 @@ import (
 	"github.com/drainage/desilting/internal/modules/acceptance"
 	"github.com/drainage/desilting/internal/modules/cleaningrecord"
 	"github.com/drainage/desilting/internal/modules/cleaningtask"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 	"github.com/drainage/desilting/internal/shared/date"
 )
+
+// dbSeq 给每次 NewDB 一个进程内唯一序号，避免 cache=shared 的内存库在测试之间串数据。
+var dbSeq atomic.Uint64
 
 // NewDB 创建仅供本次测试使用的内存 SQLite 数据库，并完成表结构迁移。
 func NewDB(t *testing.T) *gorm.DB {
@@ -29,8 +34,9 @@ func NewDB(t *testing.T) *gorm.DB {
 	// 测试名可能包含斜杠，先做一次安全替换，避免被当成文件路径片段。
 	safeName := strings.ReplaceAll(t.Name(), "/", "_")
 	safeName = strings.ReplaceAll(safeName, " ", "_")
+	dsnName := fmt.Sprintf("%s_%d", safeName, dbSeq.Add(1))
 
-	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", safeName)), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", dsnName)), &gorm.Config{
 		Logger:         gormlogger.Default.LogMode(gormlogger.Silent),
 		TranslateError: true,
 	})
@@ -56,6 +62,7 @@ func NewDB(t *testing.T) *gorm.DB {
 
 // Services 一套装配完成的业务服务，等价于 router 中的生产装配方式。
 type Services struct {
+	Hierarchy   *hierarchy.Service
 	Segments    *pipesegment.Service
 	Tasks       *cleaningtask.Service
 	Records     *cleaningrecord.Service
@@ -64,11 +71,18 @@ type Services struct {
 
 // NewServices 按生产环境的依赖顺序装配服务。
 func NewServices(db *gorm.DB) *Services {
-	segments := pipesegment.NewService(pipesegment.NewRepository(db))
-	tasks := cleaningtask.NewService(cleaningtask.NewRepository(db), segments)
+	hier := hierarchy.NewService(hierarchy.NewRepository(db))
+	segments := pipesegment.NewService(pipesegment.NewRepository(db), hier)
+	tasks := cleaningtask.NewService(cleaningtask.NewRepository(db), segments, hier)
 	records := cleaningrecord.NewService(cleaningrecord.NewRepository(db), tasks)
 	acceptances := acceptance.NewService(acceptance.NewRepository(db), tasks, segments, records)
-	return &Services{Segments: segments, Tasks: tasks, Records: records, Acceptances: acceptances}
+	return &Services{
+		Hierarchy:   hier,
+		Segments:    segments,
+		Tasks:       tasks,
+		Records:     records,
+		Acceptances: acceptances,
+	}
 }
 
 // Fixture 内存库 + 服务 + 默认管段的组合，方便测试用例直接使用。
@@ -87,14 +101,13 @@ func NewFixture(t *testing.T) *Fixture {
 	return &Fixture{Services: services, DB: db, Segment: segment}
 }
 
-// CreateSegment 创建一条管段。
-func (s *Services) CreateSegment(t *testing.T, code, district string) *pipesegment.PipeSegment {
+// CreateSegmentOnRoad 在指定道路上创建一条管段。
+func (s *Services) CreateSegmentOnRoad(t *testing.T, code string, roadID uint) *pipesegment.PipeSegment {
 	t.Helper()
 	segment, err := s.Segments.Create(context.Background(), pipesegment.SaveRequest{
 		Code:         code,
 		Name:         "测试管段 " + code,
-		District:     district,
-		RoadName:     "测试道路",
+		RoadID:       roadID,
 		PipeType:     pipesegment.TypeRainwater,
 		Material:     "concrete",
 		DiameterMm:   600,
@@ -108,6 +121,48 @@ func (s *Services) CreateSegment(t *testing.T, code, district string) *pipesegme
 		t.Fatalf("创建测试管段失败: %v", err)
 	}
 	return segment
+}
+
+// CreateSegment 创建一条管段（自动准备指定片区下的“测试道路”层级，同名复用）。
+func (s *Services) CreateSegment(t *testing.T, code, district string) *pipesegment.PipeSegment {
+	t.Helper()
+	roadID := s.ensureRoad(t, district, "测试道路")
+	return s.CreateSegmentOnRoad(t, code, roadID)
+}
+
+// ensureRoad 幂等地准备指定片区下的一条道路，返回道路 ID。
+func (s *Services) ensureRoad(t *testing.T, districtName, roadName string) uint {
+	t.Helper()
+	tree, err := s.Hierarchy.Tree(context.Background())
+	if err != nil {
+		t.Fatalf("查询层级失败: %v", err)
+	}
+	var districtID uint
+	for _, d := range tree {
+		if d.Name == districtName {
+			districtID = d.ID
+			for _, r := range d.Roads {
+				if r.Name == roadName {
+					return r.ID
+				}
+			}
+			break
+		}
+	}
+	if districtID == 0 {
+		d, err := s.Hierarchy.CreateDistrict(context.Background(), hierarchy.SaveDistrictRequest{Name: districtName})
+		if err != nil {
+			t.Fatalf("创建测试片区失败: %v", err)
+		}
+		districtID = d.ID
+	}
+	road, err := s.Hierarchy.CreateRoad(context.Background(), hierarchy.SaveRoadRequest{
+		Name: roadName, DistrictID: districtID,
+	})
+	if err != nil {
+		t.Fatalf("创建测试道路失败: %v", err)
+	}
+	return road.ID
 }
 
 // CreateTask 创建一条待开工的清淤任务（计划开始日期为 3 天前）。

@@ -34,6 +34,16 @@ func (r *Repository) Create(ctx context.Context, record *CleaningRecord) error {
 	return r.db.WithContext(ctx).Create(record).Error
 }
 
+// CreateInTx 在给定事务中新增记录。
+func (r *Repository) CreateInTx(ctx context.Context, tx *gorm.DB, record *CleaningRecord) error {
+	return tx.WithContext(ctx).Create(record).Error
+}
+
+// Transaction 执行事务，供记录录入、任务推进与层级快照固化保持原子。
+func (r *Repository) Transaction(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	return r.db.WithContext(ctx).Transaction(fn)
+}
+
 // Save 保存记录全部字段。
 func (r *Repository) Save(ctx context.Context, record *CleaningRecord) error {
 	record.UpdatedAt = time.Now()
@@ -113,6 +123,12 @@ func (r *Repository) filtered(ctx context.Context, query ListQuery) *gorm.DB {
 			Select("id").
 			Where("pipe_segment_id = ?", query.SegmentID)
 		tx = tx.Where("task_id IN (?)", subQuery)
+	}
+	if len(query.DistrictIDs) > 0 {
+		tx = tx.Where("district_id IN ?", query.DistrictIDs)
+	}
+	if len(query.RoadIDs) > 0 {
+		tx = tx.Where("road_id IN ?", query.RoadIDs)
 	}
 	if query.Method != "" {
 		tx = tx.Where("method = ?", query.Method)

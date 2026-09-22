@@ -8,10 +8,17 @@ import (
 )
 
 // CleaningRecord 清淤记录。
+//
+// DistrictID/RoadID 与 DistrictName/RoadName 是记录录入当时的层级快照，
+// 片区调整之后历史记录仍按录入当时的层级展示。
 type CleaningRecord struct {
 	ID                 uint      `gorm:"primaryKey" json:"id"`
 	Code               string    `gorm:"size:32;uniqueIndex;not null" json:"code"`
 	TaskID             uint      `gorm:"index;not null" json:"taskId"`
+	DistrictID         uint      `gorm:"index" json:"districtId"`
+	RoadID             uint      `gorm:"index" json:"roadId"`
+	DistrictName       string    `gorm:"size:64" json:"districtName"`
+	RoadName           string    `gorm:"size:128" json:"roadName"`
 	CleanedAt          date.Date `gorm:"type:date;index;not null" json:"cleanedAt"`
 	LengthM            float64   `gorm:"not null" json:"lengthM"`
 	SludgeVolumeM3     float64   `gorm:"not null" json:"sludgeVolumeM3"`

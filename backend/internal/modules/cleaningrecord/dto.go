@@ -28,27 +28,31 @@ type SaveRequest struct {
 	Remark             string    `json:"remark" label:"备注" validate:"max=1000"`
 }
 
-// ListQuery 清淤记录列表查询条件。
+// ListQuery 清淤记录列表查询条件。层级按记录录入当时的快照筛选。
 type ListQuery struct {
-	Keyword   string
-	TaskID    uint
-	SegmentID uint
-	Method    string
-	Weather   string
-	DateFrom  *date.Date
-	DateTo    *date.Date
-	Page      httpx.PageQuery
+	Keyword     string
+	TaskID      uint
+	SegmentID   uint
+	DistrictIDs []uint
+	RoadIDs     []uint
+	Method      string
+	Weather     string
+	DateFrom    *date.Date
+	DateTo      *date.Date
+	Page        httpx.PageQuery
 }
 
 // ParseListQuery 解析列表查询条件。
 func ParseListQuery(c *fiber.Ctx) (ListQuery, error) {
 	query := ListQuery{
-		Keyword:   httpx.TrimmedQuery(c, "keyword"),
-		TaskID:    uint(c.QueryInt("taskId", 0)),
-		SegmentID: uint(c.QueryInt("segmentId", 0)),
-		Method:    httpx.TrimmedQuery(c, "method"),
-		Weather:   httpx.TrimmedQuery(c, "weather"),
-		Page:      httpx.ParsePage(c),
+		Keyword:     httpx.TrimmedQuery(c, "keyword"),
+		TaskID:      uint(c.QueryInt("taskId", 0)),
+		SegmentID:   uint(c.QueryInt("segmentId", 0)),
+		DistrictIDs: httpx.UintIDsQuery(c, "districtIds"),
+		RoadIDs:     httpx.UintIDsQuery(c, "roadIds"),
+		Method:      httpx.TrimmedQuery(c, "method"),
+		Weather:     httpx.TrimmedQuery(c, "weather"),
+		Page:        httpx.ParsePage(c),
 	}
 	from, err := parseDateParam(c, "dateFrom", "清淤日期起")
 	if err != nil {

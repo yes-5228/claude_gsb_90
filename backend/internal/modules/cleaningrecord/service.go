@@ -20,6 +20,8 @@ import (
 type TaskGateway interface {
 	FindByID(ctx context.Context, id uint) (*cleaningtask.CleaningTask, error)
 	EnsureStarted(ctx context.Context, id uint) (*cleaningtask.CleaningTask, error)
+	// StartInTx 在记录录入事务内把任务幂等推进到清淤中，并返回任务（含层级快照）。
+	StartInTx(ctx context.Context, tx *gorm.DB, id uint) (*cleaningtask.CleaningTask, error)
 }
 
 // Service 清淤记录业务逻辑。
@@ -34,12 +36,12 @@ func NewService(repo *Repository, tasks TaskGateway) *Service {
 }
 
 // Create 录入清淤记录。首次录入时会把任务从"待开工"推进到"清淤中"。
+//
+// 任务推进、层级快照固化与记录写入在同一事务内完成：与层级归属调整并发时，
+// 事务先提交者确定归属口径，录入中的记录必然归属到调整前或调整后其中一个
+// 确定的层级，直接复用任务登记当时的层级快照。
 func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningRecord, error) {
 	if err := validate(req); err != nil {
-		return nil, err
-	}
-	// 先确认任务可录入（同时完成状态推进），避免写入脏数据。
-	if _, err := s.tasks.EnsureStarted(ctx, req.TaskID); err != nil {
 		return nil, err
 	}
 
@@ -48,9 +50,23 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*CleaningRecord,
 
 	for attempt := 0; attempt < 5; attempt++ {
 		record.Code = s.nextCode(ctx, record.CleanedAt)
-		err := s.repo.Create(ctx, record)
+		err := s.repo.Transaction(ctx, func(tx *gorm.DB) error {
+			task, err := s.tasks.StartInTx(ctx, tx, req.TaskID)
+			if err != nil {
+				return err
+			}
+			record.DistrictID = task.DistrictID
+			record.RoadID = task.RoadID
+			record.DistrictName = task.DistrictName
+			record.RoadName = task.RoadName
+			return s.repo.CreateInTx(ctx, tx, record)
+		})
 		if err == nil {
 			return record, nil
+		}
+		var appErr *httpx.AppError
+		if errors.As(err, &appErr) {
+			return nil, err
 		}
 		if !errors.Is(err, gorm.ErrDuplicatedKey) {
 			return nil, httpx.WrapInternal("录入清淤记录失败", err)

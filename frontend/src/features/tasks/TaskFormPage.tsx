@@ -1,5 +1,5 @@
 // 清淤任务登记 / 编辑表单。
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { segmentApi } from '../../api/pipesegments';
 import { taskApi } from '../../api/tasks';
@@ -136,6 +136,25 @@ export function TaskFormPage() {
   };
 
   const segmentItems = segments.data?.items ?? [];
+  const segmentGroups = useMemo(() => {
+    const groups = new Map<string, Map<string, typeof segmentItems>>();
+    segmentItems.forEach((item) => {
+      const district = item.district || '未分片区';
+      const road = item.roadName || '未命名道路';
+      if (!groups.has(district)) {
+        groups.set(district, new Map());
+      }
+      const roadGroups = groups.get(district)!;
+      if (!roadGroups.has(road)) {
+        roadGroups.set(road, []);
+      }
+      roadGroups.get(road)!.push(item);
+    });
+    return Array.from(groups.entries()).map(([district, roadMap]) => ({
+      district,
+      roads: Array.from(roadMap.entries()).map(([road, items]) => ({ road, items }))
+    }));
+  }, [segmentItems]);
 
   return (
     <form
@@ -190,11 +209,17 @@ export function TaskFormPage() {
                 onChange={(event) => form.setValue('pipeSegmentId', event.target.value)}
               >
                 <option value="">请选择管段</option>
-                {segmentItems.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.code} · {item.name}
-                  </option>
-                ))}
+                {segmentGroups.map((group) =>
+                  group.roads.map((roadGroup) => (
+                    <optgroup key={`${group.district}/${roadGroup.road}`} label={`${group.district} / ${roadGroup.road}`}>
+                      {roadGroup.items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.code} · {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                )}
               </select>
             </FormField>
             <FormField label="优先级" error={form.errors.priority}>

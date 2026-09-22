@@ -63,6 +63,7 @@ export function SegmentDetailPage() {
 
   const segment = detail.data?.segment;
   const stats = detail.data?.taskStats;
+  const hier = detail.data?.hierarchy;
 
   const handleDelete = async () => {
     if (!segment) {
@@ -115,8 +116,8 @@ export function SegmentDetailPage() {
                 items={[
                   { label: '管段编号', value: segment.code },
                   { label: '管段名称', value: segment.name },
-                  { label: '所属片区', value: segment.district },
-                  { label: '所在道路', value: segment.roadName || '—' },
+                  { label: '所属片区', value: hier?.districtName ?? '—' },
+                  { label: '所在道路', value: hier?.roadName ?? '—' },
                   { label: '管段类型', value: <StatusTag list="pipeTypes" value={segment.pipeType} /> },
                   { label: '管材', value: segment.material || '—' },
                   { label: '管径', value: `DN${segment.diameterMm}` },

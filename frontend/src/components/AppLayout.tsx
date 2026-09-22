@@ -15,7 +15,13 @@ interface NavGroup {
 
 const NAV_GROUPS: NavGroup[] = [
   { title: '总览', items: [{ to: '/', label: '运行看板', end: true }] },
-  { title: '管网台账', items: [{ to: '/segments', label: '管段台账' }] },
+  {
+    title: '管网台账',
+    items: [
+      { to: '/hierarchy', label: '片区 / 道路' },
+      { to: '/segments', label: '管段台账' }
+    ]
+  },
   {
     title: '清淤作业',
     items: [

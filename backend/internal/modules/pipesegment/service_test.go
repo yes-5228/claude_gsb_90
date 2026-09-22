@@ -5,16 +5,16 @@ import (
 	"testing"
 
 	"github.com/drainage/desilting/internal/httpx"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 	"github.com/drainage/desilting/internal/testsupport"
 )
 
-func segmentRequest(code, district string) pipesegment.SaveRequest {
+func segmentRequest(code string, roadID uint) pipesegment.SaveRequest {
 	return pipesegment.SaveRequest{
 		Code:         code,
 		Name:         "管段 " + code,
-		District:     district,
-		RoadName:     "中山北路",
+		RoadID:       roadID,
 		PipeType:     pipesegment.TypeRainwater,
 		Material:     "concrete",
 		DiameterMm:   800,
@@ -27,10 +27,27 @@ func segmentRequest(code, district string) pipesegment.SaveRequest {
 	}
 }
 
+// createRoad 在指定片区下准备一条道路。
+func createRoad(t *testing.T, fixture *testsupport.Fixture, district, road string) uint {
+	t.Helper()
+	d, err := fixture.Hierarchy.CreateDistrict(context.Background(), hierarchy.SaveDistrictRequest{Name: district})
+	if err != nil {
+		t.Fatalf("创建片区失败: %v", err)
+	}
+	r, err := fixture.Hierarchy.CreateRoad(context.Background(), hierarchy.SaveRoadRequest{
+		Name: road, DistrictID: d.ID,
+	})
+	if err != nil {
+		t.Fatalf("创建道路失败: %v", err)
+	}
+	return r.ID
+}
+
 func TestCreateSegmentRejectsDuplicatedCode(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
+	roadID := createRoad(t, fixture, "城西片区", "中山北路")
 
-	_, err := fixture.Segments.Create(context.Background(), segmentRequest("PS-TEST-001", "城西片区"))
+	_, err := fixture.Segments.Create(context.Background(), segmentRequest("PS-TEST-001", roadID))
 	appErr := testsupport.RequireAppError(t, err, httpx.CodeConflict)
 	if appErr.Status != 409 {
 		t.Fatalf("期望 HTTP 状态码 409，实际 %d", appErr.Status)
@@ -39,8 +56,16 @@ func TestCreateSegmentRejectsDuplicatedCode(t *testing.T) {
 
 func TestCreateSegmentRejectsUnknownPipeType(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
-	request := segmentRequest("PS-TEST-002", "城东片区")
+	request := segmentRequest("PS-TEST-002", fixture.Segment.RoadID)
 	request.PipeType = "stormwater"
+
+	_, err := fixture.Segments.Create(context.Background(), request)
+	testsupport.RequireAppError(t, err, httpx.CodeValidation)
+}
+
+func TestCreateSegmentRejectsUnknownRoad(t *testing.T) {
+	fixture := testsupport.NewFixture(t)
+	request := segmentRequest("PS-TEST-099", 999999)
 
 	_, err := fixture.Segments.Create(context.Background(), request)
 	testsupport.RequireAppError(t, err, httpx.CodeValidation)
@@ -79,16 +104,29 @@ func TestDeleteSegmentSucceedsWhenNotReferenced(t *testing.T) {
 
 func TestListSegmentsFiltersByDistrictAndKeyword(t *testing.T) {
 	fixture := testsupport.NewFixture(t)
-	fixture.CreateSegment(t, "PS-TEST-005", "城西片区")
-	fixture.CreateSegment(t, "PS-TEST-006", "城南片区")
+	westRoad := createRoad(t, fixture, "城西片区", "解放路")
+	southRoad := createRoad(t, fixture, "城南片区", "长江路")
+	segWest := fixture.CreateSegmentOnRoad(t, "PS-TEST-005", westRoad)
+	_ = segWest
+	fixture.CreateSegmentOnRoad(t, "PS-TEST-006", southRoad)
+
+	// 找到“城西片区”的 ID。
+	tree, err := fixture.Hierarchy.Tree(context.Background())
+	testsupport.RequireNoError(t, err)
+	var westDistrictID uint
+	for _, d := range tree {
+		if d.Name == "城西片区" {
+			westDistrictID = d.ID
+		}
+	}
 
 	byDistrict, total, err := fixture.Segments.List(context.Background(), pipesegment.ListQuery{
-		District: "城西片区",
-		Page:     httpx.PageQuery{Page: 1, PageSize: 10},
+		DistrictIDs: []uint{westDistrictID},
+		Page:        httpx.PageQuery{Page: 1, PageSize: 10},
 	})
 	testsupport.RequireNoError(t, err)
-	if total != 1 || len(byDistrict) != 1 {
-		t.Fatalf("期望按片区筛出 1 条管段，实际 total=%d len=%d", total, len(byDistrict))
+	if total != 1 || len(byDistrict) != 1 || byDistrict[0].Code != "PS-TEST-005" {
+		t.Fatalf("期望按片区筛出 PS-TEST-005，实际 total=%d %+v", total, byDistrict)
 	}
 
 	byKeyword, _, err := fixture.Segments.List(context.Background(), pipesegment.ListQuery{

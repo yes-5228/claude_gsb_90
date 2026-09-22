@@ -13,6 +13,7 @@ import (
 	"github.com/drainage/desilting/internal/modules/cleaningrecord"
 	"github.com/drainage/desilting/internal/modules/cleaningtask"
 	"github.com/drainage/desilting/internal/modules/dashboard"
+	"github.com/drainage/desilting/internal/modules/hierarchy"
 	"github.com/drainage/desilting/internal/modules/meta"
 	"github.com/drainage/desilting/internal/modules/pipesegment"
 )
@@ -37,8 +38,10 @@ func Setup(app *fiber.App, db *gorm.DB, cfg *config.Config) {
 	api := app.Group("/api/v1")
 	meta.Register(api)
 
-	segmentService := pipesegment.Register(api, db)
-	taskService := cleaningtask.Register(api, db, segmentService)
+	// 层级是最底层的基础数据，先装配，供管段 / 任务 / 记录共用同一套片区与道路。
+	hierarchyService := hierarchy.Register(api, db)
+	segmentService := pipesegment.Register(api, db, hierarchyService)
+	taskService := cleaningtask.Register(api, db, segmentService, hierarchyService)
 	recordService := cleaningrecord.Register(api, db, taskService)
 	acceptance.Register(api, db, taskService, segmentService, recordService)
 	dashboard.Register(api, db)

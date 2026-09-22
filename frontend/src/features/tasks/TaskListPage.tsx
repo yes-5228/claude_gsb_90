@@ -1,31 +1,45 @@
-// 清淤任务列表：按状态、片区、优先级、来源与关键字检索。
+// 清淤任务列表：按状态、层级快照（多选）、优先级、来源与关键字检索。
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toErrorMessage } from '../../api/client';
 import { taskApi } from '../../api/tasks';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { DataTable, type Column } from '../../components/DataTable';
+import { HierarchyMultiSelect } from '../../components/HierarchyMultiSelect';
 import { PageHeader } from '../../components/PageHeader';
 import { Pagination } from '../../components/Pagination';
 import { SectionCard } from '../../components/SectionCard';
 import { StatusTag } from '../../components/StatusTag';
 import { useToast } from '../../components/Toast';
 import { useAsync } from '../../hooks/useAsync';
+import { useHierarchy } from '../../providers/HierarchyProvider';
 import { useMeta } from '../../providers/MetaProvider';
 import type { TaskListItem } from '../../types/domain';
 import { formatDate, formatNumber, formatVolume } from '../../utils/format';
 
 const PAGE_SIZE = 10;
 
+function parseIds(raw: string | null): number[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
+
 export function TaskListPage() {
   const navigate = useNavigate();
   const toast = useToast();
   const { enums } = useMeta();
+  const { districts } = useHierarchy();
   const [params, setParams] = useSearchParams();
 
   const keyword = params.get('keyword') ?? '';
   const status = params.get('status') ?? '';
-  const district = params.get('district') ?? '';
+  const districtIds = parseIds(params.get('districtIds'));
+  const roadIds = parseIds(params.get('roadIds'));
   const priority = params.get('priority') ?? '';
   const source = params.get('source') ?? '';
   const page = Math.max(1, Number(params.get('page') ?? '1') || 1);
@@ -36,8 +50,18 @@ export function TaskListPage() {
   }, [keyword]);
 
   const list = useAsync(
-    () => taskApi.list({ keyword, status, district, priority, source, page, pageSize: PAGE_SIZE }),
-    [keyword, status, district, priority, source, page]
+    () =>
+      taskApi.list({
+        keyword,
+        status,
+        districtIds: districtIds.length ? districtIds : undefined,
+        roadIds: roadIds.length ? roadIds : undefined,
+        priority,
+        source,
+        page,
+        pageSize: PAGE_SIZE
+      }),
+    [keyword, status, params.get('districtIds'), params.get('roadIds'), priority, source, page]
   );
 
   const [pendingDelete, setPendingDelete] = useState<TaskListItem | null>(null);
@@ -95,13 +119,15 @@ export function TaskListPage() {
     },
     {
       key: 'segment',
-      title: '关联管段',
-      width: '170px',
+      title: '关联管段 / 层级',
+      width: '200px',
       render: (row) => (
         <>
           <span>{row.segment?.code ?? '—'}</span>
           <span className="cell-sub">
-            {row.segment ? `${row.segment.district} · ${row.segment.name}` : '管段已删除'}
+            {row.districtName || row.segment?.district || '—'}
+            {' · '}
+            {row.roadName || row.segment?.roadName || '—'}
           </span>
         </>
       )
@@ -167,7 +193,7 @@ export function TaskListPage() {
     <div className="page">
       <PageHeader
         title="清淤任务"
-        description="登记年度计划、巡查发现与投诉举报产生的清淤任务，驱动清淤记录录入与验收流程。"
+        description="登记年度计划、巡查发现与投诉举报产生的清淤任务；层级按任务登记当时的快照展示。"
         actions={
           <button type="button" className="btn btn-primary" onClick={() => navigate('/tasks/new')}>
             登记任务
@@ -203,6 +229,20 @@ export function TaskListPage() {
                 ))}
               </select>
             </div>
+            <div className="filter-item" style={{ minWidth: 220 }}>
+              <span className="filter-label">片区 / 道路</span>
+              <HierarchyMultiSelect
+                districts={districts}
+                selectedDistrictIds={districtIds}
+                selectedRoadIds={roadIds}
+                onChange={({ districtIds: d, roadIds: r }) =>
+                  applyFilter({
+                    districtIds: d.length ? d.join(',') : '',
+                    roadIds: r.length ? r.join(',') : ''
+                  })
+                }
+              />
+            </div>
             <div className="filter-item">
               <span className="filter-label">优先级</span>
               <select
@@ -228,15 +268,6 @@ export function TaskListPage() {
                   </option>
                 ))}
               </select>
-            </div>
-            <div className="filter-item">
-              <span className="filter-label">所属片区</span>
-              <input
-                className="input"
-                placeholder="精确匹配片区"
-                value={district}
-                onChange={(event) => applyFilter({ district: event.target.value })}
-              />
             </div>
             <div className="filter-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setParams(new URLSearchParams())}>

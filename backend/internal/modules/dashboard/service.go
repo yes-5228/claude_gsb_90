@@ -171,8 +171,9 @@ func (s *Service) Overview(ctx context.Context) (*Overview, error) {
 	return result, nil
 }
 
-// DistrictStat 片区维度的统计。
+// DistrictStat 片区维度的统计（始终按当前层级汇总）。
 type DistrictStat struct {
+	DistrictID            uint       `json:"districtId"`
 	District              string     `json:"district"`
 	SegmentCount          int64      `json:"segmentCount"`
 	SegmentLengthM        float64    `json:"segmentLengthM"`
@@ -183,9 +184,10 @@ type DistrictStat struct {
 	SludgeVolumeM3        float64    `json:"sludgeVolumeM3"`
 }
 
-// DistrictStats 按片区统计管段规模与清淤成果。
+// DistrictStats 按当前片区统计管段规模与清淤成果。
 func (s *Service) DistrictStats(ctx context.Context) ([]DistrictStat, error) {
 	type segmentRow struct {
+		DistrictID            uint
 		District              string
 		SegmentCount          int64
 		SegmentLengthM        float64
@@ -193,54 +195,58 @@ func (s *Service) DistrictStats(ctx context.Context) ([]DistrictStat, error) {
 		LastCleanedAt         *date.Date
 	}
 	segmentRows := make([]segmentRow, 0)
-	err := s.db.WithContext(ctx).Table(refx.TablePipeSegments).
-		Select(`district,
+	err := s.db.WithContext(ctx).Table(refx.TablePipeSegments + " AS p").
+		Select(`d.id AS district_id, d.name AS district,
 			COUNT(*) AS segment_count,
-			COALESCE(SUM(length_m), 0) AS segment_length_m,
-			COALESCE(SUM(CASE WHEN last_cleaned_at IS NULL THEN 1 ELSE 0 END), 0) AS uncleaned_segment_count,
-			MAX(last_cleaned_at) AS last_cleaned_at`).
-		Group("district").
-		Order("district ASC").
+			COALESCE(SUM(p.length_m), 0) AS segment_length_m,
+			COALESCE(SUM(CASE WHEN p.last_cleaned_at IS NULL THEN 1 ELSE 0 END), 0) AS uncleaned_segment_count,
+			MAX(p.last_cleaned_at) AS last_cleaned_at`).
+		Joins("INNER JOIN roads AS r ON r.id = p.road_id").
+		Joins("INNER JOIN districts AS d ON d.id = r.district_id").
+		Group("d.id, d.name").
+		Order("d.sort_order ASC, d.name ASC").
 		Scan(&segmentRows).Error
 	if err != nil {
 		return nil, httpx.WrapInternal("统计片区管段失败", err)
 	}
 
 	type taskRow struct {
-		District          string
+		DistrictID        uint
 		TaskCount         int64
 		AcceptedTaskCount int64
 		SludgeVolumeM3    float64
 	}
 	taskRows := make([]taskRow, 0)
 	err = s.db.WithContext(ctx).Table(refx.TableCleaningTasks+" AS t").
-		Select(`s.district AS district,
+		Select(`r.district_id AS district_id,
 			COUNT(DISTINCT t.id) AS task_count,
 			COUNT(DISTINCT CASE WHEN t.status = ? THEN t.id END) AS accepted_task_count,
-			COALESCE(SUM(r.sludge_volume_m3), 0) AS sludge_volume_m3`, cleaningtask.StatusAccepted).
-		Joins("INNER JOIN " + refx.TablePipeSegments + " AS s ON s.id = t.pipe_segment_id").
-		Joins("LEFT JOIN " + refx.TableCleaningRecords + " AS r ON r.task_id = t.id").
-		Group("s.district").
+			COALESCE(SUM(cr.sludge_volume_m3), 0) AS sludge_volume_m3`, cleaningtask.StatusAccepted).
+		Joins("INNER JOIN " + refx.TablePipeSegments + " AS p ON p.id = t.pipe_segment_id").
+		Joins("INNER JOIN roads AS r ON r.id = p.road_id").
+		Joins("LEFT JOIN " + refx.TableCleaningRecords + " AS cr ON cr.task_id = t.id").
+		Group("r.district_id").
 		Scan(&taskRows).Error
 	if err != nil {
 		return nil, httpx.WrapInternal("统计片区清淤量失败", err)
 	}
 
-	taskByDistrict := make(map[string]taskRow, len(taskRows))
+	taskByDistrict := make(map[uint]taskRow, len(taskRows))
 	for _, row := range taskRows {
-		taskByDistrict[row.District] = row
+		taskByDistrict[row.DistrictID] = row
 	}
 
 	stats := make([]DistrictStat, 0, len(segmentRows))
 	for _, row := range segmentRows {
 		item := DistrictStat{
+			DistrictID:            row.DistrictID,
 			District:              row.District,
 			SegmentCount:          row.SegmentCount,
 			SegmentLengthM:        num.Round2(row.SegmentLengthM),
 			UncleanedSegmentCount: row.UncleanedSegmentCount,
 			LastCleanedAt:         row.LastCleanedAt,
 		}
-		if task, ok := taskByDistrict[row.District]; ok {
+		if task, ok := taskByDistrict[row.DistrictID]; ok {
 			item.TaskCount = task.TaskCount
 			item.AcceptedTaskCount = task.AcceptedTaskCount
 			item.SludgeVolumeM3 = num.Round2(task.SludgeVolumeM3)
@@ -258,6 +264,7 @@ type PendingAcceptanceItem struct {
 	SegmentCode     string     `json:"segmentCode"`
 	SegmentName     string     `json:"segmentName"`
 	SegmentDistrict string     `json:"segmentDistrict"`
+	SegmentRoad     string     `json:"segmentRoad"`
 	TeamName        string     `json:"teamName"`
 	PlanEndDate     date.Date  `json:"planEndDate"`
 	FinishedAt      *time.Time `json:"finishedAt"`
@@ -274,16 +281,19 @@ func (s *Service) PendingAcceptance(ctx context.Context, limit int) ([]PendingAc
 	items := make([]PendingAcceptanceItem, 0, limit)
 	err := s.db.WithContext(ctx).Table(refx.TableCleaningTasks+" AS t").
 		Select(`t.id AS task_id, t.code, t.title, t.team_name, t.plan_end_date, t.finished_at,
-			COALESCE(s.code, '') AS segment_code,
-			COALESCE(s.name, '') AS segment_name,
-			COALESCE(s.district, '') AS segment_district,
-			COALESCE(r.record_count, 0) AS record_count,
-			COALESCE(r.sludge_volume, 0) AS sludge_volume_m3`).
-		Joins("LEFT JOIN "+refx.TablePipeSegments+" AS s ON s.id = t.pipe_segment_id").
+			COALESCE(p.code, '') AS segment_code,
+			COALESCE(p.name, '') AS segment_name,
+			COALESCE(d.name, '') AS segment_district,
+			COALESCE(r.name, '') AS segment_road,
+			COALESCE(rc.record_count, 0) AS record_count,
+			COALESCE(rc.sludge_volume, 0) AS sludge_volume_m3`).
+		Joins("LEFT JOIN "+refx.TablePipeSegments+" AS p ON p.id = t.pipe_segment_id").
+		Joins("LEFT JOIN roads AS r ON r.id = p.road_id").
+		Joins("LEFT JOIN districts AS d ON d.id = r.district_id").
 		Joins(`LEFT JOIN (
 			SELECT task_id, COUNT(*) AS record_count, SUM(sludge_volume_m3) AS sludge_volume
 			FROM `+refx.TableCleaningRecords+` GROUP BY task_id
-		) AS r ON r.task_id = t.id`).
+		) AS rc ON rc.task_id = t.id`).
 		Where("t.status = ?", cleaningtask.StatusCompleted).
 		Order("t.finished_at ASC, t.id ASC").
 		Limit(limit).
@@ -307,18 +317,20 @@ func (s *Service) PendingAcceptance(ctx context.Context, limit int) ([]PendingAc
 
 // RecentRecordItem 最近清淤记录。
 type RecentRecordItem struct {
-	RecordID       uint      `json:"recordId"`
-	Code           string    `json:"code"`
-	CleanedAt      date.Date `json:"cleanedAt"`
-	TaskID         uint      `json:"taskId"`
-	TaskCode       string    `json:"taskCode"`
-	TaskTitle      string    `json:"taskTitle"`
-	SegmentCode    string    `json:"segmentCode"`
-	SegmentName    string    `json:"segmentName"`
-	TeamName       string    `json:"teamName"`
-	RecorderName   string    `json:"recorderName"`
-	LengthM        float64   `json:"lengthM"`
-	SludgeVolumeM3 float64   `json:"sludgeVolumeM3"`
+	RecordID        uint      `json:"recordId"`
+	Code            string    `json:"code"`
+	CleanedAt       date.Date `json:"cleanedAt"`
+	TaskID          uint      `json:"taskId"`
+	TaskCode        string    `json:"taskCode"`
+	TaskTitle       string    `json:"taskTitle"`
+	SegmentCode     string    `json:"segmentCode"`
+	SegmentName     string    `json:"segmentName"`
+	SegmentDistrict string    `json:"segmentDistrict"`
+	SegmentRoad     string    `json:"segmentRoad"`
+	TeamName        string    `json:"teamName"`
+	RecorderName    string    `json:"recorderName"`
+	LengthM         float64   `json:"lengthM"`
+	SludgeVolumeM3  float64   `json:"sludgeVolumeM3"`
 }
 
 // RecentRecords 最近录入的清淤记录。
@@ -327,14 +339,18 @@ func (s *Service) RecentRecords(ctx context.Context, limit int) ([]RecentRecordI
 		limit = 10
 	}
 	items := make([]RecentRecordItem, 0, limit)
-	err := s.db.WithContext(ctx).Table(refx.TableCleaningRecords + " AS r").
-		Select(`r.id AS record_id, r.code, r.cleaned_at, r.length_m, r.sludge_volume_m3, r.recorder_name,
+	err := s.db.WithContext(ctx).Table(refx.TableCleaningRecords + " AS cr").
+		Select(`cr.id AS record_id, cr.code, cr.cleaned_at, cr.length_m, cr.sludge_volume_m3, cr.recorder_name,
 			t.id AS task_id, t.code AS task_code, t.title AS task_title, t.team_name,
-			COALESCE(s.code, '') AS segment_code,
-			COALESCE(s.name, '') AS segment_name`).
-		Joins("INNER JOIN " + refx.TableCleaningTasks + " AS t ON t.id = r.task_id").
-		Joins("LEFT JOIN " + refx.TablePipeSegments + " AS s ON s.id = t.pipe_segment_id").
-		Order("r.cleaned_at DESC, r.id DESC").
+			COALESCE(p.code, '') AS segment_code,
+			COALESCE(p.name, '') AS segment_name,
+			COALESCE(d.name, '') AS segment_district,
+			COALESCE(r.name, '') AS segment_road`).
+		Joins("INNER JOIN " + refx.TableCleaningTasks + " AS t ON t.id = cr.task_id").
+		Joins("LEFT JOIN " + refx.TablePipeSegments + " AS p ON p.id = t.pipe_segment_id").
+		Joins("LEFT JOIN roads AS r ON r.id = p.road_id").
+		Joins("LEFT JOIN districts AS d ON d.id = r.district_id").
+		Order("cr.cleaned_at DESC, cr.id DESC").
 		Limit(limit).
 		Scan(&items).Error
 	if err != nil {

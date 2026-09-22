@@ -33,11 +33,19 @@ const (
 )
 
 // CleaningTask 清淤任务。
+//
+// DistrictID/RoadID 与 DistrictName/RoadName 是任务登记当时的层级快照：
+// 后续片区调整、道路改名或归属调整都不会回写历史任务，历史数据始终按登记当时
+// 的层级与名称展示。
 type CleaningTask struct {
 	ID            uint       `gorm:"primaryKey" json:"id"`
 	Code          string     `gorm:"size:32;uniqueIndex;not null" json:"code"`
 	Title         string     `gorm:"size:128;not null" json:"title"`
 	PipeSegmentID uint       `gorm:"index;not null" json:"pipeSegmentId"`
+	DistrictID    uint       `gorm:"index" json:"districtId"`
+	RoadID        uint       `gorm:"index" json:"roadId"`
+	DistrictName  string     `gorm:"size:64" json:"districtName"`
+	RoadName      string     `gorm:"size:128" json:"roadName"`
 	Priority      string     `gorm:"size:16;index;not null;default:normal" json:"priority"`
 	Source        string     `gorm:"size:16;index;not null;default:plan" json:"source"`
 	Method        string     `gorm:"size:24" json:"method"`
